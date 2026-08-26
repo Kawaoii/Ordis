@@ -1287,9 +1287,17 @@ function formatCooldownMs(ms) {
   return hours + ' hour' + (hours === 1 ? '' : 's') + (minutes ? ' ' + minutes + ' minute' + (minutes === 1 ? '' : 's') : '');
 }
 
-async function fetchProfileJson(accountId) {
+async function fetchProfileJson(accountId, platform) {
   const encodedId = encodeURIComponent(accountId);
-  const endpoint = `https://api.warframe.com/cdn/getProfileViewingData.php?playerId=${encodedId}`;
+  let sub = 'api';
+  if (platform) {
+    const p = String(platform).trim().toLowerCase();
+    if (p === 'ps4' || p === 'playstation') sub = 'api-ps4';
+    else if (p === 'xb1' || p === 'xbox') sub = 'api-xb1';
+    else if (p === 'swi' || p === 'switch' || p === 'nintendo switch') sub = 'api-swi';
+    else if (p === 'mob' || p === 'mobile' || p === 'ios' || p === 'android') sub = 'api-mob';
+  }
+  const endpoint = `https://${sub}.warframe.com/cdn/getProfileViewingData.php?playerId=${encodedId}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROFILE_FETCH_TIMEOUT_MS);
 
@@ -1339,40 +1347,50 @@ async function fetchProfileJson(accountId) {
   }
 }
 
-async function fetchWarframeProfileFromLog() {
-  const processInfo = await detectWarframeProcess();
-  if (!processInfo.running) {
-    return {
-      ok: false,
-      reason: 'process-not-running',
-      process: processInfo,
-      message: 'Open Warframe and log in. The app will detect the process before fetching your profile.'
-    };
-  }
-
-  const logInfo = await findWarframeLog();
-  if (!logInfo) {
-    return {
-      ok: false,
-      reason: 'log-not-found',
-      process: processInfo,
-      message: 'Warframe is running, but EE.log was not found in the usual local Warframe folder.'
-    };
-  }
-
-  const logText = await readWarframeLogText(logInfo);
-  const accountId = extractAccountIdFromLog(logText);
-  const fallbackDisplayName = extractDisplayNameFromLog(logText);
+async function fetchWarframeProfileFromLog(manualAccountId, platform) {
+  let accountId = manualAccountId ? String(manualAccountId).trim() : '';
+  let fallbackDisplayName = '';
+  let logInfo = null;
+  let processInfo = { running: false };
 
   if (!accountId) {
-    return {
-      ok: false,
-      reason: 'account-id-not-found',
-      process: processInfo,
-      logPath: logInfo.path,
-      logUpdatedAt: logInfo.mtimeMs,
-      message: 'Warframe was detected, but the account id is not in EE.log yet. Log in fully, then enter and leave a Relay or Dojo to refresh profile data.'
-    };
+    processInfo = await detectWarframeProcess();
+    if (!processInfo.running) {
+      return {
+        ok: false,
+        reason: 'process-not-running',
+        process: processInfo,
+        message: 'Open Warframe and log in. The app will detect the process before fetching your profile.'
+      };
+    }
+
+    logInfo = await findWarframeLog();
+    if (!logInfo) {
+      return {
+        ok: false,
+        reason: 'log-not-found',
+        process: processInfo,
+        message: 'Warframe is running, but EE.log was not found in the usual local Warframe folder.'
+      };
+    }
+
+    const logText = await readWarframeLogText(logInfo);
+    accountId = extractAccountIdFromLog(logText);
+    fallbackDisplayName = extractDisplayNameFromLog(logText);
+
+    if (!accountId) {
+      return {
+        ok: false,
+        reason: 'account-id-not-found',
+        process: processInfo,
+        logPath: logInfo.path,
+        logUpdatedAt: logInfo.mtimeMs,
+        message: 'Warframe was detected, but the account id is not in EE.log yet. Log in fully, then enter and leave a Relay or Dojo to refresh profile data.'
+      };
+    }
+  } else {
+    processInfo = await detectWarframeProcess();
+    logInfo = await findWarframeLog();
   }
 
   const now = Date.now();
@@ -1384,8 +1402,8 @@ async function fetchWarframeProfileFromLog() {
     return Object.assign({}, cacheEntry.result, {
       ok: true,
       process: processInfo,
-      logPath: logInfo.path,
-      logUpdatedAt: logInfo.mtimeMs,
+      logPath: logInfo ? logInfo.path : '',
+      logUpdatedAt: logInfo ? logInfo.mtimeMs : 0,
       cached: true,
       cacheAgeMs,
       fetchedAt: cachedFetchedAt,
@@ -1402,8 +1420,8 @@ async function fetchWarframeProfileFromLog() {
       ok: false,
       reason: 'profile-cooldown',
       process: processInfo,
-      logPath: logInfo.path,
-      logUpdatedAt: logInfo.mtimeMs,
+      logPath: logInfo ? logInfo.path : '',
+      logUpdatedAt: logInfo ? logInfo.mtimeMs : 0,
       cooldownMs: remainingMs,
       message: 'Profile fetch is cooling down for about ' + formatCooldownMs(remainingMs) + ' to protect you from Warframe rate limits.'
     };
@@ -1411,15 +1429,15 @@ async function fetchWarframeProfileFromLog() {
 
   await saveProfileCacheAttempt(accountId, now);
 
-  const profileResponse = await fetchProfileJson(accountId);
+  const profileResponse = await fetchProfileJson(accountId, platform);
   if (!profileResponse.ok) {
     await saveProfileCacheFailure(accountId, now, profileResponse.message);
     return {
       ok: false,
       reason: 'profile-fetch-failed',
       process: processInfo,
-      logPath: logInfo.path,
-      logUpdatedAt: logInfo.mtimeMs,
+      logPath: logInfo ? logInfo.path : '',
+      logUpdatedAt: logInfo ? logInfo.mtimeMs : 0,
       message: profileResponse.message || 'Profile data could not be fetched.'
     };
   }
@@ -1435,8 +1453,8 @@ async function fetchWarframeProfileFromLog() {
       ok: false,
       reason: 'profile-empty',
       process: processInfo,
-      logPath: logInfo.path,
-      logUpdatedAt: logInfo.mtimeMs,
+      logPath: logInfo ? logInfo.path : '',
+      logUpdatedAt: logInfo ? logInfo.mtimeMs : 0,
       displayName: summary.displayName,
       masteryRank: summary.masteryRank,
       message: 'Profile data was fetched, but no mastery XP entries were found. Enter and leave a Relay or Dojo, then try again.'
@@ -1446,8 +1464,8 @@ async function fetchWarframeProfileFromLog() {
   const result = {
     ok: true,
     process: processInfo,
-    logPath: logInfo.path,
-    logUpdatedAt: logInfo.mtimeMs,
+    logPath: logInfo ? logInfo.path : '',
+    logUpdatedAt: logInfo ? logInfo.mtimeMs : 0,
     displayName: summary.displayName,
     masteryRank: summary.masteryRank,
     xpInfo,
@@ -1783,9 +1801,9 @@ ipcMain.handle('reset-warframe-log-path', async () => {
   }
 });
 
-ipcMain.handle('fetch-warframe-profile', async () => {
+ipcMain.handle('fetch-warframe-profile', async (_event, manualAccountId, platform) => {
   try {
-    return await fetchWarframeProfileFromLog();
+    return await fetchWarframeProfileFromLog(manualAccountId, platform);
   } catch (err) {
     return {
       ok: false,
@@ -1819,6 +1837,170 @@ ipcMain.handle('scan-image-for-items', async (event, imageDataUrl) => {
     };
   } finally {
     activeOcrProgressTarget = null;
+  }
+});
+
+ipcMain.handle('wfm-login-credentials', async (_event, email, password) => {
+  try {
+    const getResp = await fetch('https://warframe.market/');
+    const cookies = getResp.headers.get('set-cookie');
+    
+    var jwtCookie = '';
+    if (cookies) {
+      var arr = cookies.split(',');
+      for (var c = 0; c < arr.length; c++) {
+        var trimmed = arr[c].trim();
+        if (trimmed.startsWith('JWT=')) {
+          jwtCookie = trimmed.split(';')[0];
+          break;
+        }
+      }
+      if (!jwtCookie && cookies.startsWith('JWT=')) {
+        jwtCookie = cookies.split(';')[0];
+      }
+    }
+
+    if (!jwtCookie) {
+      return {
+        ok: false,
+        message: 'Failed to obtain JWT session cookie. Cloudflare rate-limiting or protection might be active.'
+      };
+    }
+
+    const html = await getResp.text();
+    const csrfMatch = html.match(/<meta\s+name="csrf-token"\s+content="([^"]+)"/i);
+    if (!csrfMatch) {
+      return {
+        ok: false,
+        message: 'Failed to extract CSRF token from page metadata.'
+      };
+    }
+    const csrfToken = csrfMatch[1];
+
+    const postResp = await fetch('https://api.warframe.market/v1/auth/signin', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Cookie': jwtCookie,
+        'x-csrf-token': csrfToken
+      },
+      body: JSON.stringify({
+        auth_type: 'header',
+        email: email.trim(),
+        password: password
+      })
+    });
+
+    if (!postResp.ok) {
+      const errBody = await postResp.json().catch(() => ({}));
+      var msg = 'Signin failed';
+      if (errBody.error) {
+        if (typeof errBody.error === 'string') {
+          msg = errBody.error;
+        } else if (errBody.error.password) {
+          msg = 'Invalid password (' + errBody.error.password[0] + ')';
+        } else if (errBody.error.email) {
+          msg = 'Invalid email (' + errBody.error.email[0] + ')';
+        } else if (errBody.error.request) {
+          msg = errBody.error.request[0];
+        }
+      }
+      return {
+        ok: false,
+        message: msg
+      };
+    }
+
+    const token = postResp.headers.get('Authorization') || postResp.headers.get('authorization');
+    const json = await postResp.json();
+    const user = json.payload && json.payload.user;
+
+    if (!token) {
+      return {
+        ok: false,
+        message: 'Authorization header missing in sign-in response.'
+      };
+    }
+
+    return {
+      ok: true,
+      token: token.startsWith('JWT ') ? token : 'JWT ' + token,
+      user: user
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      message: err && err.message ? err.message : 'Network error occurred during sign-in.'
+    };
+  }
+});
+
+ipcMain.handle('wfm-fetch', async (_event, url, options) => {
+  try {
+    options = options || {};
+    options.headers = options.headers || {};
+
+    const authHeader = options.headers['Authorization'] || options.headers['authorization'];
+    if (authHeader) {
+      const tokenOnly = authHeader.startsWith('JWT ') ? authHeader.substring(4).trim() : authHeader.trim();
+      options.headers['Cookie'] = 'JWT=' + tokenOnly;
+    }
+
+    options.headers['Accept'] = 'application/json';
+    options.headers['Platform'] = 'pc';
+
+    const resp = await fetch(url, options);
+    const status = resp.status;
+    const ok = resp.ok;
+
+    let body = null;
+    const contentType = resp.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      body = await resp.json().catch(() => null);
+    } else {
+      body = await resp.text().catch(() => null);
+    }
+
+    return {
+      ok: ok,
+      status: status,
+      body: body
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 500,
+      message: err && err.message ? err.message : 'Network error occurred during API fetch.'
+    };
+  }
+});
+
+async function setWfmCookie(tokenOnly) {
+  try {
+    const { session } = require('electron');
+    await session.defaultSession.cookies.set({
+      url: 'https://warframe.market',
+      name: 'JWT',
+      value: tokenOnly,
+      domain: '.warframe.market',
+      path: '/',
+      secure: true,
+      httpOnly: true,
+      expirationDate: Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60)
+    });
+  } catch (err) {
+    console.error('Failed to set WFM session cookie:', err);
+  }
+}
+
+ipcMain.handle('wfm-set-cookie', async (_event, token) => {
+  try {
+    const tokenOnly = token.startsWith('JWT ') ? token.substring(4).trim() : token.trim();
+    await setWfmCookie(tokenOnly);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, message: err.message };
   }
 });
 

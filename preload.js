@@ -24,8 +24,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getWarframeLogConfig: () => ipcRenderer.invoke('get-warframe-log-config'),
   selectWarframeLogFile: () => ipcRenderer.invoke('select-warframe-log-file'),
   resetWarframeLogPath: () => ipcRenderer.invoke('reset-warframe-log-path'),
-  fetchWarframeProfile: () => ipcRenderer.invoke('fetch-warframe-profile'),
+  fetchWarframeProfile: (manualAccountId, platform) => ipcRenderer.invoke('fetch-warframe-profile', String(manualAccountId || ''), String(platform || '')),
   scanImageForItems: (imageDataUrl) => ipcRenderer.invoke('scan-image-for-items', String(imageDataUrl || '')),
+  wfmLoginCredentials: (email, password) => ipcRenderer.invoke('wfm-login-credentials', String(email || ''), String(password || '')),
+  wfmFetch: (url, options) => ipcRenderer.invoke('wfm-fetch', String(url || ''), options || {}),
+  wfmSetCookie: (token) => ipcRenderer.invoke('wfm-set-cookie', String(token || '')),
   onAppUpdateEvent: (callback) => {
     if (typeof callback !== 'function') return () => {};
     var listener = (_event, payload) => callback(payload || {});

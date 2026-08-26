@@ -15015,3 +15015,408 @@ select:focus {
   }
 }
 
+
+/* ==========================================
+   WARFRAME MARKET ACCOUNT & ORDERS STYLES
+   ========================================== */
+
+/* Header Connection UI */
+.category-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.market-user-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 6px 14px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: var(--shadow-sm);
+  transition: all 0.2s ease;
+}
+
+.market-user-badge .material-icons-round {
+  color: var(--text-gold, #c89c3c);
+  font-size: 18px;
+}
+
+.btn-disconnect {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  margin-left: 6px;
+  transition: all 0.2s ease;
+}
+
+.btn-disconnect:hover {
+  color: #ff4d4d;
+  background: rgba(255, 77, 77, 0.1);
+}
+
+/* WFM Connection Modal */
+.modal.wfm-login-modal {
+  width: 500px;
+  background: #0a0a0f;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.wfm-login-hint {
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin-bottom: 20px;
+}
+
+.wfm-tabs {
+  display: flex;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 3px;
+  margin-bottom: 20px;
+}
+
+.wfm-tab-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 12px;
+  border-radius: calc(var(--radius-md) - 2px);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.wfm-tab-btn:hover {
+  color: var(--text-primary);
+}
+
+.wfm-tab-btn.active {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.wfm-tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wfm-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.wfm-input {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  transition: all 0.2s ease;
+}
+
+.wfm-input:focus {
+  outline: none;
+  border-color: var(--text-gold, #c89c3c);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.wfm-input.small {
+  width: 100px;
+  padding: 8px 12px;
+}
+
+.form-help {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+  opacity: 0.8;
+}
+
+.wfm-submit-btn {
+  width: 100%;
+  margin-top: 10px;
+  justify-content: center;
+}
+
+.wfm-login-status {
+  margin-top: 15px;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+  min-height: 20px;
+}
+
+.wfm-login-status.error {
+  color: #ff4d4d;
+}
+
+.wfm-login-status.success {
+  color: #2ecc71;
+}
+
+.wfm-login-status.loading {
+  color: var(--text-gold, #c89c3c);
+}
+
+/* User Order Section inside Item Modal */
+.wfm-user-orders-section {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.wfm-section-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wfm-create-order-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)) 150px;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.wfm-create-order-grid .form-group {
+  gap: 6px;
+}
+
+/* Active user orders list in modal */
+.wfm-active-orders-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.wfm-active-order-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px 16px;
+  transition: all 0.2s ease;
+}
+
+.wfm-active-order-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.wfm-active-order-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 13px;
+}
+
+.wfm-badge-type {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.5px;
+}
+
+.wfm-badge-type.sell {
+  background: rgba(231, 76, 60, 0.15);
+  color: #e74c3c;
+  border: 1px solid rgba(231, 76, 60, 0.25);
+}
+
+.wfm-badge-type.buy {
+  background: rgba(46, 204, 113, 0.15);
+  color: #2ecc71;
+  border: 1px solid rgba(46, 204, 113, 0.25);
+}
+
+.wfm-order-prop {
+  color: var(--text-dim);
+}
+
+.wfm-order-prop strong {
+  color: var(--text-primary);
+}
+
+.wfm-active-order-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.btn-icon-only {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.btn-icon-only:hover {
+  color: var(--text-primary);
+  background: rgba(255,255,255,0.06);
+}
+
+.btn-icon-only.delete:hover {
+  color: #ff4d4d;
+  background: rgba(255, 77, 77, 0.1);
+}
+
+/* Global My Orders View */
+.my-orders-view {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 16px 24px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.my-orders-table-container {
+  background: rgba(10, 10, 15, 0.6);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+}
+
+.my-orders-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.my-orders-table th, .my-orders-table td {
+  padding: 14px 18px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.my-orders-table th {
+  background: rgba(255, 255, 255, 0.02);
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+
+.my-orders-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.my-orders-table tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.01);
+}
+
+.my-orders-item-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.my-orders-item-img {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.03);
+}
+
+.my-orders-input-plat {
+  width: 70px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 6px 8px;
+  color: var(--text-primary);
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.my-orders-input-qty {
+  width: 60px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 6px 8px;
+  color: var(--text-primary);
+  text-align: center;
+  font-size: 13px;
+}
+
+.my-orders-empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+.my-orders-empty .material-icons-round {
+  font-size: 48px;
+  margin-bottom: 12px;
+  display: block;
+  opacity: 0.5;
+}
+
+.my-orders-suggestions {
+  box-shadow: var(--shadow-lg);
+}
+.suggestion-item {
+  transition: all 0.2s ease;
+}
+.suggestion-item:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: var(--text-gold, #c89c3c);
+}
+

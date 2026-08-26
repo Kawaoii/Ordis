@@ -313,6 +313,10 @@
           <button class="market-cat-btn" data-market-cat="misc">Misc <span class="market-cat-count">0</span></button>
         </div>
         <div class="market-mode-actions">
+          <button class="market-mode-btn hidden" id="market-my-orders-btn" type="button">
+            <span class="material-icons-round">list_alt</span>
+            <span id="market-my-orders-btn-label">My Orders</span>
+          </button>
           <button class="market-mode-btn" id="market-contracts-btn" type="button">
             <span class="material-icons-round">gavel</span>
             <span id="market-contracts-btn-label">Contracts</span>
@@ -326,9 +330,31 @@
           <h1 class="category-title" id="market-panel-title">Warframe Market</h1>
           <span class="category-count" id="market-item-count">0 items</span>
         </div>
+        <div class="category-header-actions" id="market-auth-section">
+          <!-- Not Connected State -->
+          <button class="btn btn-secondary" id="market-connect-btn" type="button">
+            <span class="material-icons-round">vpn_key</span>
+            <span>Connect Account</span>
+          </button>
+          
+          <!-- Connected State (hidden by default) -->
+          <div class="market-user-badge hidden" id="market-user-badge" style="display: flex; align-items: center; gap: 8px;">
+            <span class="material-icons-round">account_circle</span>
+            <span id="market-username-label">Connected</span>
+            <select id="wfm-status-select" class="wfm-status-select" style="background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 11px; padding: 2px 6px; cursor: pointer; outline: none; height: 24px; font-weight: 600;">
+              <option value="invisible">Offline</option>
+              <option value="online">Online</option>
+              <option value="ingame">In-Game</option>
+            </select>
+            <button class="btn-disconnect" id="market-disconnect-btn" type="button" title="Disconnect WFM Account">
+              <span class="material-icons-round">logout</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       <div class="contracts-view hidden" id="contracts-view"></div>
+      <div class="my-orders-view hidden" id="my-orders-view"></div>
 
       <!-- Market Grid -->
       <div class="market-grid" id="market-grid">
@@ -1223,6 +1249,29 @@
                 </button>
               </div>
             </div>
+            <!-- Manual Account ID Override (Recommended for recent logs / console players) -->
+            <div class="profile-log-section" style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 16px;">
+              <h3 class="profile-sync-section-title">Manual Account Configuration</h3>
+              <div class="settings-toggle-subtitle" style="margin-bottom: 12px;">
+                If your Account ID is not detected in your logs, or you are on console, enter it here. Find your ID by logging into <a href="https://www.warframe.com" target="_blank" style="color: var(--color-primary); text-decoration: underline;">warframe.com</a> and visiting <a href="https://www.warframe.com/api/user-data" target="_blank" style="color: var(--color-primary); text-decoration: underline;">warframe.com/api/user-data</a>.
+              </div>
+              <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 8px;">
+                <div style="flex: 1;">
+                  <label for="profile-manual-id-input" style="display: block; font-size: 11px; color: var(--text-dim); text-transform: uppercase; font-weight: 600; margin-bottom: 4px;">Account ID (user_id)</label>
+                  <input type="text" id="profile-manual-id-input" placeholder="e.g. 699df20d8a4870fbdf05db53" style="width: 100%; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 13px; padding: 6px 10px; outline: none; height: 32px;" />
+                </div>
+                <div style="width: 150px;">
+                  <label for="profile-platform-select" style="display: block; font-size: 11px; color: var(--text-dim); text-transform: uppercase; font-weight: 600; margin-bottom: 4px;">Platform</label>
+                  <select id="profile-platform-select" style="width: 100%; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 13px; padding: 4px 8px; outline: none; height: 32px; cursor: pointer;">
+                    <option value="pc">PC</option>
+                    <option value="ps4">PlayStation</option>
+                    <option value="xb1">Xbox</option>
+                    <option value="swi">Nintendo Switch</option>
+                    <option value="mob">Mobile (iOS/Android)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1629,6 +1678,53 @@
           <button class="btn btn-secondary" id="reset-cancel">Cancel</button>
           <button class="btn btn-danger" id="reset-confirm">Reset All</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Warframe Market Login Modal -->
+  <div class="modal-overlay hidden" id="wfm-login-modal">
+    <div class="modal wfm-login-modal">
+      <div class="modal-header">
+        <h2 class="modal-title">Connect Warframe Market Account</h2>
+        <button class="modal-close" id="wfm-login-close">
+          <span class="material-icons-round">close</span>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p class="wfm-login-hint">
+          Connect your account to publish and manage orders directly from this app. All session details are stored locally on your device.
+        </p>
+        
+        <div class="wfm-tabs">
+          <button class="wfm-tab-btn active" id="wfm-tab-jwt-btn" type="button">JWT Token (Recommended)</button>
+          <button class="wfm-tab-btn" id="wfm-tab-credentials-btn" type="button">Email & Password</button>
+        </div>
+
+        <div class="wfm-tab-content" id="wfm-tab-jwt-content">
+          <div class="form-group">
+            <label for="wfm-jwt-input" class="wfm-label">JWT Cookie Token</label>
+            <input type="password" id="wfm-jwt-input" class="wfm-input" placeholder="Paste your JWT token here...">
+            <span class="form-help">
+              To get your token: Log in to <strong>warframe.market</strong> in your browser, open Developer Tools (F12), go to Application/Storage -> Cookies -> warframe.market, and copy the value of the "JWT" cookie.
+            </span>
+          </div>
+          <button class="btn btn-primary wfm-submit-btn" id="wfm-submit-jwt" type="button">Connect with Token</button>
+        </div>
+
+        <div class="wfm-tab-content hidden" id="wfm-tab-credentials-content">
+          <div class="form-group">
+            <label for="wfm-email-input" class="wfm-label">Email Address</label>
+            <input type="email" id="wfm-email-input" class="wfm-input" placeholder="Enter account email...">
+          </div>
+          <div class="form-group">
+            <label for="wfm-password-input" class="wfm-label">Password</label>
+            <input type="password" id="wfm-password-input" class="wfm-input" placeholder="Enter account password...">
+          </div>
+          <button class="btn btn-primary wfm-submit-btn" id="wfm-submit-credentials" type="button">Connect with Credentials</button>
+        </div>
+
+        <div class="wfm-login-status" id="wfm-login-status"></div>
       </div>
     </div>
   </div>

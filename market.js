@@ -126,25 +126,40 @@
       return;
     }
 
+    if (marketViewMode === 'my_orders') {
+      refs.title.textContent = 'My Active Listings';
+      refs.count.textContent = 'Managing your warframe.market orders';
+      return;
+    }
+
     refs.title.textContent = 'Warframe Market';
     refs.count.textContent = filteredMarketItems.length + ' items';
   }
 
   function renderMarketViewState() {
     var refs = getMarketPanelRefs();
-    if (refs.topbar) refs.topbar.classList.toggle('hidden', marketViewMode === 'contracts');
-    if (refs.categoriesList) refs.categoriesList.classList.toggle('hidden', marketViewMode === 'contracts');
-    if (refs.grid) refs.grid.classList.toggle('hidden', marketViewMode === 'contracts');
-    if (refs.contractsView) refs.contractsView.classList.toggle('hidden', marketViewMode !== 'contracts');
+    var isItems = marketViewMode === 'items';
+    var isContracts = marketViewMode === 'contracts';
+    var isMyOrders = marketViewMode === 'my_orders';
 
-    if (refs.contractsBtn) refs.contractsBtn.classList.toggle('active', marketViewMode === 'contracts');
-    if (refs.contractsBtnLabel) refs.contractsBtnLabel.textContent = marketViewMode === 'contracts' ? 'Back To Market' : 'Contracts';
+    if (refs.topbar) refs.topbar.classList.toggle('hidden', !isItems);
+    if (refs.categoriesList) refs.categoriesList.classList.toggle('hidden', !isItems);
+    if (refs.grid) refs.grid.classList.toggle('hidden', !isItems);
+    if (refs.contractsView) refs.contractsView.classList.toggle('hidden', !isContracts);
+
+    if (refs.contractsBtn) refs.contractsBtn.classList.toggle('active', isContracts);
+    if (refs.contractsBtnLabel) refs.contractsBtnLabel.textContent = isContracts ? 'Back To Market' : 'Contracts';
+
+    var myOrdersView = $('#my-orders-view');
+    var myOrdersBtn = $('#market-my-orders-btn');
+    if (myOrdersView) myOrdersView.classList.toggle('hidden', !isMyOrders);
+    if (myOrdersBtn) myOrdersBtn.classList.toggle('active', isMyOrders);
 
     updateMarketPanelHeader();
   }
 
   async function setMarketViewMode(mode) {
-    marketViewMode = mode === 'contracts' ? 'contracts' : 'items';
+    marketViewMode = mode === 'contracts' ? 'contracts' : (mode === 'my_orders' ? 'my_orders' : 'items');
     renderMarketViewState();
 
     if (marketViewMode === 'contracts') {
@@ -154,6 +169,11 @@
         /* render fallback below */
       }
       renderContractsView();
+      return;
+    }
+
+    if (marketViewMode === 'my_orders') {
+      fetchAndRenderMyOrders();
       return;
     }
 
@@ -2312,6 +2332,7 @@
     var data = Array.isArray(json.data) ? json.data : [];
     return data.map(function (o) {
       return {
+        id: o.id,
         order_type: o.type,
         platinum: o.platinum,
         quantity: o.quantity,
@@ -3328,6 +3349,12 @@
   function renderOrdersContent(container, sellOrders, buyOrders, itemMeta) {
     container.textContent = '';
 
+    // If connected, render user orders and order creation form at the top
+    if (wfmSession.token && wfmSession.user) {
+      var userOrdersBlock = renderUserOrdersSection(sellOrders, buyOrders, itemMeta);
+      container.appendChild(userOrdersBlock);
+    }
+
     var itemName = itemMeta && itemMeta.name ? itemMeta.name : 'this item';
     var wikiUrl = itemMeta && itemMeta.wikiUrl ? itemMeta.wikiUrl : '';
     var showRankColumn = itemSupportsOrderRank(itemMeta, sellOrders, buyOrders);
@@ -3770,6 +3797,892 @@
     }
   }
 
+  // =========================================================================
+  //  WARFRAME.MARKET ACCOUNT INTEGRATION & ORDER ACTIONS
+  // =========================================================================
+
+  let wfmSession = {
+    token: null,
+    user: null
+  };
+
+  let wfmSocket = null;
+  let wfmSocketStatus = 'invisible';
+
+  function connectWfmSocket() {
+    if (!wfmSession.token) return;
+
+    if (wfmSocket) {
+      try { wfmSocket.close(); } catch(e) {}
+      wfmSocket = null;
+    }
+
+    if (typeof window.electronAPI === 'undefined' || typeof window.electronAPI.wfmSetCookie !== 'function') {
+      console.warn('WFM Set Cookie API not available.');
+      return;
+    }
+
+    window.electronAPI.wfmSetCookie(wfmSession.token).then(function(res) {
+      try {
+        console.log('Connecting WFM WebSocket...');
+        wfmSocket = new WebSocket('wss://warframe.market/socket?platform=pc');
+
+        wfmSocket.addEventListener('open', function() {
+          console.log('WFM WebSocket connected.');
+          sendWfmSocketStatus(wfmSocketStatus);
+        });
+
+        wfmSocket.addEventListener('message', function(event) {
+          try {
+            var msg = JSON.parse(event.data);
+            if (msg.type === '@WS/USER/SET_STATUS' && msg.payload) {
+              wfmSocketStatus = msg.payload;
+              updateStatusSelectorUI();
+            }
+          } catch(e) {}
+        });
+
+        wfmSocket.addEventListener('close', function() {
+          console.log('WFM WebSocket closed.');
+          wfmSocket = null;
+          if (wfmSession.token) {
+            setTimeout(connectWfmSocket, 5000);
+          }
+        });
+
+        wfmSocket.addEventListener('error', function(err) {
+          console.error('WFM WebSocket error:', err);
+        });
+      } catch (err) {
+        console.error('Failed to create WFM WebSocket:', err);
+      }
+    }).catch(function(err) {
+      console.error('Failed to set session cookie:', err);
+    });
+  }
+
+  function sendWfmSocketStatus(status) {
+    wfmSocketStatus = status;
+    if (wfmSocket && wfmSocket.readyState === WebSocket.OPEN) {
+      wfmSocket.send(JSON.stringify({
+        type: '@WS/USER/SET_STATUS',
+        payload: status
+      }));
+    }
+    updateStatusSelectorUI();
+  }
+
+  function updateStatusSelectorUI() {
+    var select = $('#wfm-status-select');
+    if (select) {
+      select.value = wfmSocketStatus;
+      if (wfmSocketStatus === 'ingame') {
+        select.style.color = '#c89c3c';
+        select.style.borderColor = '#c89c3c';
+      } else if (wfmSocketStatus === 'online') {
+        select.style.color = '#4caf50';
+        select.style.borderColor = '#4caf50';
+      } else {
+        select.style.color = 'var(--text-dim)';
+        select.style.borderColor = 'var(--border-color)';
+      }
+    }
+  }
+
+  function disconnectWfmSocket() {
+    if (wfmSocket) {
+      try { wfmSocket.close(); } catch(e) {}
+      wfmSocket = null;
+    }
+  }
+
+  function updateWfmHeaderUI() {
+    var connectBtn = $('#market-connect-btn');
+    var userBadge = $('#market-user-badge');
+    var usernameLabel = $('#market-username-label');
+    var myOrdersBtn = $('#market-my-orders-btn');
+
+    if (wfmSession.token && wfmSession.user) {
+      if (connectBtn) connectBtn.classList.add('hidden');
+      if (userBadge) userBadge.classList.remove('hidden');
+      if (usernameLabel) usernameLabel.textContent = wfmSession.user.ingame_name || 'Connected';
+      if (myOrdersBtn) myOrdersBtn.classList.remove('hidden');
+      updateStatusSelectorUI();
+    } else {
+      if (connectBtn) connectBtn.classList.remove('hidden');
+      if (userBadge) userBadge.classList.add('hidden');
+      if (myOrdersBtn) myOrdersBtn.classList.add('hidden');
+      if (marketViewMode === 'my_orders') {
+        setMarketViewMode('items');
+      }
+    }
+  }
+
+  async function verifyWfmToken(token) {
+    var cleanToken = token.trim();
+    var authHeader = cleanToken.startsWith('JWT ') ? cleanToken : 'JWT ' + cleanToken;
+    var json = await wfmFetch('https://api.warframe.market/v1/profile', {
+      headers: {
+        'Authorization': authHeader
+      }
+    });
+    if (!json || !json.payload || !json.payload.user) {
+      throw new Error('Invalid response payload');
+    }
+    return json.payload.user;
+  }
+
+  async function connectWfmWithToken(token) {
+    var statusEl = $('#wfm-login-status');
+    if (statusEl) {
+      statusEl.className = 'wfm-login-status loading';
+      statusEl.textContent = 'Verifying JWT token...';
+    }
+
+    try {
+      var user = await verifyWfmToken(token);
+      wfmSession.token = token.startsWith('JWT ') ? token.trim() : 'JWT ' + token.trim();
+      wfmSession.user = user;
+      localStorage.setItem('wfm_jwt_token', wfmSession.token);
+      localStorage.setItem('wfm_user_info', JSON.stringify(user));
+
+      updateWfmHeaderUI();
+      connectWfmSocket();
+
+      if (statusEl) {
+        statusEl.className = 'wfm-login-status success';
+        statusEl.textContent = 'Connected as ' + user.ingame_name + '!';
+      }
+      setTimeout(closeWfmLoginModal, 1200);
+      return true;
+    } catch (err) {
+      if (statusEl) {
+        statusEl.className = 'wfm-login-status error';
+        statusEl.textContent = 'Failed: ' + err.message;
+      }
+      return false;
+    }
+  }
+
+  async function connectWfmWithCredentials(email, password) {
+    var statusEl = $('#wfm-login-status');
+    if (statusEl) {
+      statusEl.className = 'wfm-login-status loading';
+      statusEl.textContent = 'Connecting to warframe.market...';
+    }
+
+    try {
+      if (typeof window.electronAPI === 'undefined' || typeof window.electronAPI.wfmLoginCredentials !== 'function') {
+        throw new Error('Electron API bridge not available.');
+      }
+
+      var res = await window.electronAPI.wfmLoginCredentials(email, password);
+
+      if (!res.ok) {
+        throw new Error(res.message || 'Signin failed.');
+      }
+
+      wfmSession.token = res.token;
+      wfmSession.user = res.user;
+      localStorage.setItem('wfm_jwt_token', wfmSession.token);
+      localStorage.setItem('wfm_user_info', JSON.stringify(res.user));
+
+      updateWfmHeaderUI();
+      connectWfmSocket();
+
+      if (statusEl) {
+        statusEl.className = 'wfm-login-status success';
+        statusEl.textContent = 'Signed in as ' + res.user.ingame_name + '!';
+      }
+      setTimeout(closeWfmLoginModal, 1200);
+      return true;
+    } catch (err) {
+      if (statusEl) {
+        statusEl.className = 'wfm-login-status error';
+        statusEl.textContent = 'Failed: ' + err.message;
+      }
+      return false;
+    }
+  }
+
+  function disconnectWfm() {
+    wfmSession.token = null;
+    wfmSession.user = null;
+    localStorage.removeItem('wfm_jwt_token');
+    localStorage.removeItem('wfm_user_info');
+    updateWfmHeaderUI();
+    disconnectWfmSocket();
+  }
+
+  function initWfmSession() {
+    var token = localStorage.getItem('wfm_jwt_token');
+    var userJson = localStorage.getItem('wfm_user_info');
+    if (token && userJson) {
+      try {
+        wfmSession.token = token;
+        wfmSession.user = JSON.parse(userJson);
+        updateWfmHeaderUI();
+        connectWfmSocket();
+
+        verifyWfmToken(token).then(function (user) {
+          wfmSession.user = user;
+          localStorage.setItem('wfm_user_info', JSON.stringify(user));
+          updateWfmHeaderUI();
+        }).catch(function (e) {
+          console.error('Background token validation failed:', e);
+        });
+      } catch (err) {
+        disconnectWfm();
+      }
+    }
+  }
+
+  async function wfmFetch(url, options) {
+    options = options || {};
+    options.headers = options.headers || {};
+    if (wfmSession.token) {
+      options.headers['Authorization'] = wfmSession.token;
+    }
+
+    if (typeof window.electronAPI === 'undefined' || typeof window.electronAPI.wfmFetch !== 'function') {
+      throw new Error('Electron API bridge not available.');
+    }
+
+    var res = await window.electronAPI.wfmFetch(url, options);
+
+    if (!res.ok) {
+      var errBody = res.body || {};
+      var msg = 'HTTP ' + res.status;
+      if (errBody.error) {
+        if (typeof errBody.error === 'string') {
+          msg = errBody.error;
+        } else if (Array.isArray(errBody.error.request)) {
+          msg = errBody.error.request.join(', ');
+        } else if (errBody.error.inputs) {
+          var inputs = errBody.error.inputs;
+          msg = Object.keys(inputs).map(function(k) { return k + ': ' + inputs[k]; }).join('; ');
+        }
+      }
+      throw new Error(msg);
+    }
+    return res.body;
+  }
+
+  function openWfmLoginModal() {
+    var modal = $('#wfm-login-modal');
+    if (modal) modal.classList.remove('hidden');
+    var statusEl = $('#wfm-login-status');
+    if (statusEl) statusEl.textContent = '';
+  }
+
+  function closeWfmLoginModal() {
+    var modal = $('#wfm-login-modal');
+    if (modal) modal.classList.add('hidden');
+  }
+
+  async function wfmCreateOrder(itemId, type, platinum, quantity, visible, extraParams) {
+    var payload = {
+      itemId: itemId,
+      type: type,
+      platinum: Number(platinum),
+      quantity: Number(quantity),
+      visible: !!visible
+    };
+    if (extraParams) {
+      Object.assign(payload, extraParams);
+    }
+    return wfmFetch('https://api.warframe.market/v2/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  }
+
+  async function wfmUpdateOrder(orderId, platinum, quantity, visible, extraParams) {
+    var payload = {
+      platinum: Number(platinum),
+      quantity: Number(quantity),
+      visible: !!visible
+    };
+    if (extraParams) {
+      Object.assign(payload, extraParams);
+    }
+    return wfmFetch('https://api.warframe.market/v2/order/' + orderId, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  }
+
+  async function wfmDeleteOrder(orderId) {
+    return wfmFetch('https://api.warframe.market/v2/order/' + orderId, {
+      method: 'DELETE'
+    });
+  }
+
+  function findMarketItemById(itemId) {
+    if (!marketItems) return null;
+    for (var i = 0; i < marketItems.length; i++) {
+      if (marketItems[i].id === itemId) return marketItems[i];
+    }
+    return null;
+  }
+
+  function renderUserOrdersSection(sellOrders, buyOrders, itemMeta) {
+    var section = document.createElement('div');
+    section.className = 'wfm-user-orders-section';
+
+    var title = document.createElement('div');
+    title.className = 'wfm-section-title';
+    title.innerHTML = '<span class="material-icons-round">shopping_bag</span>Your Orders & Actions';
+    section.appendChild(title);
+
+    var showRankColumn = itemSupportsOrderRank(itemMeta, sellOrders, buyOrders);
+    var username = (wfmSession.user && wfmSession.user.ingame_name || '').toLowerCase();
+
+    var activeMyOrders = [];
+    if (username) {
+      var allOrders = [].concat(sellOrders || [], buyOrders || []);
+      activeMyOrders = allOrders.filter(function(o) {
+        return o.user && o.user.ingame_name && o.user.ingame_name.toLowerCase() === username;
+      });
+    }
+
+    if (activeMyOrders.length > 0) {
+      var list = document.createElement('div');
+      list.className = 'wfm-active-orders-list';
+
+      for (var i = 0; i < activeMyOrders.length; i++) {
+        var o = activeMyOrders[i];
+        var row = document.createElement('div');
+        row.className = 'wfm-active-order-row';
+
+        var info = document.createElement('div');
+        info.className = 'wfm-active-order-info';
+
+        var badge = document.createElement('span');
+        badge.className = 'wfm-badge-type ' + o.order_type;
+        badge.textContent = o.order_type;
+        info.appendChild(badge);
+
+        var details = document.createElement('span');
+        var rankText = (showRankColumn && o.rank !== null && typeof o.rank !== 'undefined') ? ' (Rank ' + o.rank + ')' : '';
+        details.innerHTML = 'Price: <strong class="has-platinum-icon plat-value">' + o.platinum + ' <img class="plat-icon" src="' + PLATINUM_ICON_PATH + '"></strong>' + rankText + ' | Qty: <strong>' + (o.quantity || 1) + '</strong> | Status: <strong>' + (o.visible !== false ? 'Visible' : 'Hidden') + '</strong>';
+        info.appendChild(details);
+        row.appendChild(info);
+
+        var actions = document.createElement('div');
+        actions.className = 'wfm-active-order-actions';
+
+        var toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'btn-icon-only';
+        toggleBtn.title = o.visible !== false ? 'Hide listing' : 'Show listing';
+        toggleBtn.innerHTML = o.visible !== false ? '<span class="material-icons-round">visibility_off</span>' : '<span class="material-icons-round">visibility</span>';
+        toggleBtn.addEventListener('click', function(order) {
+          return async function(e) {
+            e.stopPropagation();
+            try {
+              var extra = (showRankColumn && order.rank !== null) ? { rank: order.rank } : null;
+              await wfmUpdateOrder(order.id, order.platinum, order.quantity, !order.visible, extra);
+              await fetchAndRenderOrders(itemMeta.slug);
+            } catch (err) {
+              alert('Failed to toggle visibility: ' + err.message);
+            }
+          };
+        }(o));
+        actions.appendChild(toggleBtn);
+
+        var deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'btn-icon-only delete';
+        deleteBtn.title = 'Delete listing';
+        deleteBtn.innerHTML = '<span class="material-icons-round">delete</span>';
+        deleteBtn.addEventListener('click', function(order) {
+          return async function(e) {
+            e.stopPropagation();
+            if (!confirm('Delete this listing?')) return;
+            try {
+              await wfmDeleteOrder(order.id);
+              await fetchAndRenderOrders(itemMeta.slug);
+            } catch (err) {
+              alert('Failed to delete listing: ' + err.message);
+            }
+          };
+        }(o));
+        actions.appendChild(deleteBtn);
+
+        row.appendChild(actions);
+        list.appendChild(row);
+      }
+      section.appendChild(list);
+    }
+
+    var form = document.createElement('div');
+    form.className = 'wfm-create-order-grid';
+
+    var grpType = document.createElement('div');
+    grpType.className = 'form-group';
+    grpType.innerHTML = '<label class="wfm-label">Type</label>';
+    var selectType = document.createElement('select');
+    selectType.className = 'wfm-input';
+    selectType.style.padding = '8px 12px';
+    selectType.innerHTML = '<option value="sell">Sell Request</option><option value="buy">Buy Request</option>';
+    grpType.appendChild(selectType);
+    form.appendChild(grpType);
+
+    var grpPrice = document.createElement('div');
+    grpPrice.className = 'form-group';
+    grpPrice.innerHTML = '<label class="wfm-label">Price (Plat)</label>';
+    var inputPrice = document.createElement('input');
+    inputPrice.type = 'number';
+    inputPrice.className = 'wfm-input';
+    inputPrice.min = 1;
+    inputPrice.value = 1;
+    grpPrice.appendChild(inputPrice);
+    form.appendChild(grpPrice);
+
+    var grpQty = document.createElement('div');
+    grpQty.className = 'form-group';
+    grpQty.innerHTML = '<label class="wfm-label">Quantity</label>';
+    var inputQty = document.createElement('input');
+    inputQty.type = 'number';
+    inputQty.className = 'wfm-input';
+    inputQty.min = 1;
+    inputQty.value = 1;
+    grpQty.appendChild(inputQty);
+    form.appendChild(grpQty);
+
+    var inputRank = null;
+    if (showRankColumn) {
+      var grpRank = document.createElement('div');
+      grpRank.className = 'form-group';
+      grpRank.innerHTML = '<label class="wfm-label">Rank</label>';
+      inputRank = document.createElement('input');
+      inputRank.type = 'number';
+      inputRank.className = 'wfm-input';
+      inputRank.min = 0;
+      inputRank.max = 10;
+      inputRank.value = 0;
+      grpRank.appendChild(inputRank);
+      form.appendChild(grpRank);
+    }
+
+    var btnSubmit = document.createElement('button');
+    btnSubmit.type = 'button';
+    btnSubmit.className = 'btn btn-primary';
+    btnSubmit.textContent = 'Post Order';
+    btnSubmit.addEventListener('click', async function() {
+      var typeVal = selectType.value;
+      var priceVal = Number(inputPrice.value);
+      var qtyVal = Number(inputQty.value);
+
+      if (isNaN(priceVal) || priceVal <= 0) {
+        alert('Please enter a valid price.');
+        return;
+      }
+      if (isNaN(qtyVal) || qtyVal <= 0) {
+        alert('Please enter a valid quantity.');
+        return;
+      }
+
+      var extra = null;
+      if (showRankColumn && inputRank) {
+        var rankVal = Number(inputRank.value);
+        if (!isNaN(rankVal) && rankVal >= 0) {
+          extra = { rank: rankVal };
+        }
+      }
+
+      btnSubmit.disabled = true;
+      btnSubmit.textContent = 'Posting...';
+
+      try {
+        await wfmCreateOrder(itemMeta.id, typeVal, priceVal, qtyVal, true, extra);
+        await fetchAndRenderOrders(itemMeta.slug);
+      } catch (err) {
+        alert('Failed to post order: ' + err.message);
+        btnSubmit.disabled = false;
+        btnSubmit.textContent = 'Post Order';
+      }
+    });
+    form.appendChild(btnSubmit);
+
+    section.appendChild(form);
+    return section;
+  }
+
+  let selectedAddItem = null;
+
+  function checkItemSupportsRank(item) {
+    if (!item) return false;
+    var category = item.category ? String(item.category) : '';
+    var tags = Array.isArray(item.tags) ? item.tags : [];
+    if (category === 'mods' || category === 'arcanes') return true;
+    if (tags.indexOf('mod') !== -1 || tags.indexOf('stance') !== -1 || tags.indexOf('aura') !== -1) return true;
+    if (tags.indexOf('arcane_enhancement') !== -1 || tags.indexOf('arcane_helmet') !== -1) return true;
+    return false;
+  }
+
+  function renderAddOrderForm(container) {
+    container.innerHTML = `
+      <div class="wfm-section-title"><span class="material-icons-round">add_circle</span>Create New Listing</div>
+      <div class="my-orders-add-form" style="display: flex; gap: 16px; align-items: flex-end; margin-bottom: 20px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 16px;">
+        <div class="form-group" style="position: relative; flex: 2; display: flex; flex-direction: column; gap: 6px;">
+          <label class="wfm-label">Item Name</label>
+          <input type="text" id="my-orders-add-search" class="wfm-input" placeholder="Type item name..." autocomplete="off">
+          <div id="my-orders-add-suggestions" class="my-orders-suggestions hidden" style="position: absolute; top: 100%; left: 0; right: 0; background: #0a0a0f; border: 1px solid var(--border-color); border-radius: var(--radius-md); max-height: 200px; overflow-y: auto; z-index: 100; box-shadow: var(--shadow-lg);"></div>
+        </div>
+        <div class="form-group" style="flex: 1; display: flex; flex-direction: column; gap: 6px;">
+          <label class="wfm-label">Type</label>
+          <select id="my-orders-add-type" class="wfm-input" style="padding: 9px 12px; height: 38px;">
+            <option value="sell">Sell</option>
+            <option value="buy">Buy</option>
+          </select>
+        </div>
+        <div class="form-group" style="flex: 1; display: flex; flex-direction: column; gap: 6px;">
+          <label class="wfm-label">Price (Plat)</label>
+          <input type="number" id="my-orders-add-price" class="wfm-input" min="1" value="1" style="height: 38px;">
+        </div>
+        <div class="form-group" style="flex: 1; display: flex; flex-direction: column; gap: 6px;">
+          <label class="wfm-label">Quantity</label>
+          <input type="number" id="my-orders-add-qty" class="wfm-input" min="1" value="1" style="height: 38px;">
+        </div>
+        <div class="form-group hidden" id="my-orders-add-rank-group" style="flex: 1; display: flex; flex-direction: column; gap: 6px;">
+          <label class="wfm-label">Rank</label>
+          <input type="number" id="my-orders-add-rank" class="wfm-input" min="0" value="0" style="height: 38px;">
+        </div>
+        <button type="button" class="btn btn-primary" id="my-orders-add-submit" style="height: 38px; min-width: 120px;">Post Listing</button>
+      </div>
+    `;
+
+    var searchInput = $('#my-orders-add-search');
+    var suggestionsDiv = $('#my-orders-add-suggestions');
+    var typeSelect = $('#my-orders-add-type');
+    var priceInput = $('#my-orders-add-price');
+    var qtyInput = $('#my-orders-add-qty');
+    var rankGroup = $('#my-orders-add-rank-group');
+    var rankInput = $('#my-orders-add-rank');
+    var submitBtn = $('#my-orders-add-submit');
+
+    if (!searchInput || !suggestionsDiv || !submitBtn) return;
+
+    searchInput.addEventListener('input', function() {
+      var query = String(searchInput.value || '').trim().toLowerCase();
+      if (!query || !marketItems) {
+        suggestionsDiv.innerHTML = '';
+        suggestionsDiv.classList.add('hidden');
+        return;
+      }
+
+      var matches = marketItems.filter(function(item) {
+        return item.name && item.name.toLowerCase().includes(query);
+      }).slice(0, 10);
+
+      if (matches.length === 0) {
+        suggestionsDiv.innerHTML = '<div style="padding: 10px; color: var(--text-dim); font-size: 13px;">No items found</div>';
+      } else {
+        suggestionsDiv.innerHTML = '';
+        matches.forEach(function(item) {
+          var div = document.createElement('div');
+          div.style.padding = '8px 12px';
+          div.style.cursor = 'pointer';
+          div.style.fontSize = '13px';
+          div.style.borderBottom = '1px solid rgba(255,255,255,0.02)';
+          div.className = 'suggestion-item';
+          div.textContent = item.name;
+          div.addEventListener('click', function() {
+            searchInput.value = item.name;
+            selectedAddItem = item;
+            suggestionsDiv.classList.add('hidden');
+
+            var supportsRank = checkItemSupportsRank(item);
+            if (supportsRank) {
+              if (rankGroup) rankGroup.classList.remove('hidden');
+            } else {
+              if (rankGroup) rankGroup.classList.add('hidden');
+            }
+          });
+          suggestionsDiv.appendChild(div);
+        });
+      }
+      suggestionsDiv.classList.remove('hidden');
+    });
+
+    document.addEventListener('click', function(e) {
+      if (e.target !== searchInput && e.target !== suggestionsDiv) {
+        suggestionsDiv.classList.add('hidden');
+      }
+    });
+
+    submitBtn.addEventListener('click', async function() {
+      if (!selectedAddItem || searchInput.value !== selectedAddItem.name) {
+        alert('Please select a valid item from the suggestions dropdown list.');
+        return;
+      }
+
+      var typeVal = typeSelect.value;
+      var priceVal = Number(priceInput.value);
+      var qtyVal = Number(qtyInput.value);
+
+      if (isNaN(priceVal) || priceVal <= 0) {
+        alert('Please enter a valid price.');
+        return;
+      }
+      if (isNaN(qtyVal) || qtyVal <= 0) {
+        alert('Please enter a valid quantity.');
+        return;
+      }
+
+      var extra = null;
+      var supportsRank = checkItemSupportsRank(selectedAddItem);
+      if (supportsRank && rankInput) {
+        var rankVal = Number(rankInput.value);
+        if (!isNaN(rankVal) && rankVal >= 0) {
+          extra = { rank: rankVal };
+        }
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Posting...';
+
+      try {
+        await wfmCreateOrder(selectedAddItem.id, typeVal, priceVal, qtyVal, true, extra);
+
+        searchInput.value = '';
+        priceInput.value = '1';
+        qtyInput.value = '1';
+        if (rankInput) rankInput.value = '0';
+        if (rankGroup) rankGroup.classList.add('hidden');
+        selectedAddItem = null;
+
+        alert('Listing posted successfully!');
+        fetchAndRenderMyOrders();
+      } catch (err) {
+        alert('Failed to post order: ' + err.message);
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Post Listing';
+      }
+    });
+  }
+
+  async function fetchAndRenderMyOrders() {
+    var view = $('#my-orders-view');
+    if (!view) return;
+
+    var formContainer = $('#my-orders-form-container');
+    if (!formContainer) {
+      formContainer = document.createElement('div');
+      formContainer.id = 'my-orders-form-container';
+      formContainer.className = 'my-orders-add-section';
+      view.appendChild(formContainer);
+      renderAddOrderForm(formContainer);
+    }
+
+    var listContainer = $('#my-orders-list-container');
+    if (!listContainer) {
+      listContainer = document.createElement('div');
+      listContainer.id = 'my-orders-list-container';
+      view.appendChild(listContainer);
+    }
+
+    listContainer.innerHTML = '<div class="orders-loading">Loading your active listings...</div>';
+
+    try {
+      var json = await wfmFetch('https://api.warframe.market/v2/orders/my');
+      var orders = json.data || [];
+
+      orders.sort(function(a, b) {
+        var typeA = a.type || a.order_type || '';
+        var typeB = b.type || b.order_type || '';
+        if (typeA !== typeB) {
+          return typeA === 'sell' ? -1 : 1;
+        }
+        var itemA = findMarketItemById(a.itemId || (a.item && a.item.id) || a.item);
+        var itemB = findMarketItemById(b.itemId || (b.item && b.item.id) || b.item);
+        var nameA = itemA ? itemA.name : '';
+        var nameB = itemB ? itemB.name : '';
+        return nameA.localeCompare(nameB);
+      });
+
+      if (orders.length === 0) {
+        listContainer.innerHTML = '<div class="my-orders-empty">' +
+          '<span class="material-icons-round">list_alt</span>' +
+          '<p>You do not have any active orders on warframe.market.</p>' +
+          '</div>';
+        return;
+      }
+
+      listContainer.innerHTML = '';
+
+      var tableContainer = document.createElement('div');
+      tableContainer.className = 'my-orders-table-container';
+
+      var table = document.createElement('table');
+      table.className = 'my-orders-table';
+
+      var thead = document.createElement('thead');
+      var headerRow = document.createElement('tr');
+      var headers = ['Item', 'Type', 'Price', 'Quantity', 'Rank', 'Status', 'Actions'];
+      for (var h = 0; h < headers.length; h++) {
+        var th = document.createElement('th');
+        th.textContent = headers[h];
+        headerRow.appendChild(th);
+      }
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+
+      var tbody = document.createElement('tbody');
+      for (var i = 0; i < orders.length; i++) {
+        var o = orders[i];
+        var oId = o.id;
+        var oType = o.type || o.order_type || 'sell';
+        var oPlat = o.platinum || 0;
+        var oQty = o.quantity || 1;
+        var oRank = typeof o.rank !== 'undefined' ? o.rank : (typeof o.mod_rank !== 'undefined' ? o.mod_rank : null);
+        var oVisible = o.visible !== false;
+
+        var itemId = o.itemId || (o.item && o.item.id) || o.item;
+        var item = findMarketItemById(itemId);
+
+        var tr = document.createElement('tr');
+
+        var tdItem = document.createElement('td');
+        var itemWrap = document.createElement('div');
+        itemWrap.className = 'my-orders-item-cell';
+
+        var img = document.createElement('img');
+        img.className = 'my-orders-item-img';
+        img.src = item ? getMarketImageUrl(getMarketDisplayImage(item)) : '';
+        img.alt = item ? item.name : 'Unknown Item';
+
+        var nameSpan = document.createElement('span');
+        nameSpan.textContent = item ? item.name : 'Unknown Item';
+
+        itemWrap.appendChild(img);
+        itemWrap.appendChild(nameSpan);
+        tdItem.appendChild(itemWrap);
+        tr.appendChild(tdItem);
+
+        var tdType = document.createElement('td');
+        var typeBadge = document.createElement('span');
+        typeBadge.className = 'wfm-badge-type ' + oType;
+        typeBadge.textContent = oType;
+        tdType.appendChild(typeBadge);
+        tr.appendChild(tdType);
+
+        var tdPrice = document.createElement('td');
+        var priceInput = document.createElement('input');
+        priceInput.type = 'number';
+        priceInput.className = 'my-orders-input-plat';
+        priceInput.value = oPlat;
+        priceInput.min = 1;
+        tdPrice.appendChild(priceInput);
+        tr.appendChild(tdPrice);
+
+        var tdQty = document.createElement('td');
+        var qtyInput = document.createElement('input');
+        qtyInput.type = 'number';
+        qtyInput.className = 'my-orders-input-qty';
+        qtyInput.value = oQty;
+        qtyInput.min = 1;
+        tdQty.appendChild(qtyInput);
+        tr.appendChild(tdQty);
+
+        var tdRank = document.createElement('td');
+        tdRank.textContent = oRank !== null ? 'Rank ' + oRank : '--';
+        tr.appendChild(tdRank);
+
+        var tdStatus = document.createElement('td');
+        var statusSpan = document.createElement('span');
+        statusSpan.className = oVisible ? 'status-dot status-online' : 'status-dot status-offline';
+        statusSpan.style.display = 'inline-block';
+        statusSpan.title = oVisible ? 'Visible' : 'Hidden';
+        tdStatus.appendChild(statusSpan);
+        tr.appendChild(tdStatus);
+
+        var tdActions = document.createElement('td');
+        var actionWrap = document.createElement('div');
+        actionWrap.style.display = 'flex';
+        actionWrap.style.gap = '8px';
+
+        var btnUpdate = document.createElement('button');
+        btnUpdate.type = 'button';
+        btnUpdate.className = 'btn-icon-only';
+        btnUpdate.title = 'Save Changes';
+        btnUpdate.innerHTML = '<span class="material-icons-round">save</span>';
+        btnUpdate.addEventListener('click', function(orderId, typeVal, pInp, qInp, visVal, rVal) {
+          return async function(e) {
+            e.stopPropagation();
+            var newPlat = Number(pInp.value);
+            var newQty = Number(qInp.value);
+            if (isNaN(newPlat) || newPlat <= 0 || isNaN(newQty) || newQty <= 0) {
+              alert('Please enter valid inputs.');
+              return;
+            }
+            try {
+              var extra = rVal !== null ? { rank: rVal } : null;
+              await wfmUpdateOrder(orderId, newPlat, newQty, visVal, extra);
+              await fetchAndRenderMyOrders();
+            } catch (err) {
+              alert('Failed to update: ' + err.message);
+            }
+          };
+        }(oId, oType, priceInput, qtyInput, oVisible, oRank));
+        actionWrap.appendChild(btnUpdate);
+
+        var btnToggle = document.createElement('button');
+        btnToggle.type = 'button';
+        btnToggle.className = 'btn-icon-only';
+        btnToggle.title = oVisible ? 'Hide Listing' : 'Show Listing';
+        btnToggle.innerHTML = oVisible ? '<span class="material-icons-round">visibility_off</span>' : '<span class="material-icons-round">visibility</span>';
+        btnToggle.addEventListener('click', function(orderId, platVal, qtyVal, visVal, rVal) {
+          return async function(e) {
+            e.stopPropagation();
+            try {
+              var extra = rVal !== null ? { rank: rVal } : null;
+              await wfmUpdateOrder(orderId, platVal, qtyVal, !visVal, extra);
+              await fetchAndRenderMyOrders();
+            } catch (err) {
+              alert('Failed to toggle visibility: ' + err.message);
+            }
+          };
+        }(oId, oPlat, oQty, oVisible, oRank));
+        actionWrap.appendChild(btnToggle);
+
+        var btnDelete = document.createElement('button');
+        btnDelete.type = 'button';
+        btnDelete.className = 'btn-icon-only delete';
+        btnDelete.title = 'Delete Listing';
+        btnDelete.innerHTML = '<span class="material-icons-round">delete</span>';
+        btnDelete.addEventListener('click', function(orderId) {
+          return async function(e) {
+            e.stopPropagation();
+            if (!confirm('Are you sure you want to delete this listing?')) return;
+            try {
+              await wfmDeleteOrder(orderId);
+              await fetchAndRenderMyOrders();
+            } catch (err) {
+              alert('Failed to delete listing: ' + err.message);
+            }
+          };
+        }(oId));
+        actionWrap.appendChild(btnDelete);
+
+        tdActions.appendChild(actionWrap);
+        tr.appendChild(tdActions);
+
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      tableContainer.appendChild(table);
+      listContainer.appendChild(tableContainer);
+    } catch (err) {
+      listContainer.innerHTML = '<div class="orders-error">Failed to load orders: ' + err.message + '</div>';
+    }
+  }
+
   // ---------- Init on document ready ----------
   function initMarket() {
     if (marketInitialized) return;
@@ -3880,6 +4793,90 @@
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') closeOrdersModal();
     });
+
+    // WFM Account UI bindings
+    var connectBtn = $('#market-connect-btn');
+    if (connectBtn) {
+      connectBtn.addEventListener('click', openWfmLoginModal);
+    }
+    
+    var disconnectBtn = $('#market-disconnect-btn');
+    if (disconnectBtn) {
+      disconnectBtn.addEventListener('click', disconnectWfm);
+    }
+
+    var statusSelect = $('#wfm-status-select');
+    if (statusSelect) {
+      statusSelect.addEventListener('change', function() {
+        sendWfmSocketStatus(statusSelect.value);
+      });
+    }
+
+    var loginCloseBtn = $('#wfm-login-close');
+    if (loginCloseBtn) {
+      loginCloseBtn.addEventListener('click', closeWfmLoginModal);
+    }
+
+    // Modal Tabs
+    var tabJwtBtn = $('#wfm-tab-jwt-btn');
+    var tabCredBtn = $('#wfm-tab-credentials-btn');
+    var tabJwtContent = $('#wfm-tab-jwt-content');
+    var tabCredContent = $('#wfm-tab-credentials-content');
+
+    if (tabJwtBtn && tabCredBtn && tabJwtContent && tabCredContent) {
+      tabJwtBtn.addEventListener('click', function() {
+        tabJwtBtn.classList.add('active');
+        tabCredBtn.classList.remove('active');
+        tabJwtContent.classList.remove('hidden');
+        tabCredContent.classList.add('hidden');
+      });
+      tabCredBtn.addEventListener('click', function() {
+        tabCredBtn.classList.add('active');
+        tabJwtBtn.classList.remove('active');
+        tabCredContent.classList.remove('hidden');
+        tabJwtContent.classList.add('hidden');
+      });
+    }
+
+    // Modal Form Submits
+    var submitJwtBtn = $('#wfm-submit-jwt');
+    if (submitJwtBtn) {
+      submitJwtBtn.addEventListener('click', function() {
+        var jwtInput = $('#wfm-jwt-input');
+        var token = jwtInput ? String(jwtInput.value || '').trim() : '';
+        if (!token) {
+          alert('Please enter a JWT token.');
+          return;
+        }
+        connectWfmWithToken(token);
+      });
+    }
+
+    var submitCredBtn = $('#wfm-submit-credentials');
+    if (submitCredBtn) {
+      submitCredBtn.addEventListener('click', function() {
+        var emailInput = $('#wfm-email-input');
+        var passInput = $('#wfm-password-input');
+        var email = emailInput ? String(emailInput.value || '').trim() : '';
+        var pass = passInput ? String(passInput.value || '') : '';
+        if (!email || !pass) {
+          alert('Please enter both email and password.');
+          return;
+        }
+        connectWfmWithCredentials(email, pass);
+      });
+    }
+
+    // WFM My Orders button toggle
+    var myOrdersBtn = $('#market-my-orders-btn');
+    if (myOrdersBtn) {
+      myOrdersBtn.addEventListener('click', function() {
+        setMarketViewMode(marketViewMode === 'my_orders' ? 'items' : 'my_orders');
+      });
+    }
+
+    // Initialize session from storage
+    initWfmSession();
 
     renderMarketViewState();
   }

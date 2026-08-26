@@ -461,6 +461,8 @@
     profileFetchBtn: $('#btn-fetch-profile'),
     profileFetchBtnText: $('#profile-fetch-btn-text'),
     profileFetchStatus: $('#profile-fetch-status'),
+    profileManualIdInput: $('#profile-manual-id-input'),
+    profilePlatformSelect: $('#profile-platform-select'),
     profileFetchStatusIcon: $('#profile-fetch-status-icon'),
     profileFetchStatusTitle: $('#profile-fetch-status-title'),
     profileFetchStatusCopy: $('#profile-fetch-status-copy'),
@@ -13684,6 +13686,13 @@
   function initProfileFetchSetting() {
     refreshProfileLogPathUI();
 
+    if (els.profileManualIdInput) {
+      els.profileManualIdInput.value = localStorage.getItem('wfm_profile_manual_id') || '';
+    }
+    if (els.profilePlatformSelect) {
+      els.profilePlatformSelect.value = localStorage.getItem('wfm_profile_platform') || 'pc';
+    }
+
     var summary = loadLastProfileFetchSummary();
     if (summary && summary.importedAt) {
       var namePart = summary.displayName ? (summary.displayName + ' - ') : '';
@@ -14274,13 +14283,15 @@
     setProfileFetchButtonState({ disabled: true, text: 'Fetching...' });
     setProfileFetchStatus(
       'busy',
-      'Looking for Warframe',
-      'Checking the Warframe process, reading EE.log, and requesting your profile mastery data.',
+      'Syncing profile',
+      'Requesting your profile mastery data from Warframe servers...',
       ''
     );
 
     try {
-      var result = await window.electronAPI.fetchWarframeProfile();
+      var manualId = els.profileManualIdInput ? String(els.profileManualIdInput.value || '').trim() : '';
+      var platform = els.profilePlatformSelect ? String(els.profilePlatformSelect.value || '').trim() : 'pc';
+      var result = await window.electronAPI.fetchWarframeProfile(manualId, platform);
       if (!result || result.ok === false) {
         handleProfileFetchFailure(result || {});
         return;
@@ -15316,6 +15327,18 @@
   if (els.alwaysOnTopToggle) {
     els.alwaysOnTopToggle.addEventListener('change', function() {
       setAlwaysOnTopEnabled(!!els.alwaysOnTopToggle.checked);
+    });
+  }
+
+  if (els.profileManualIdInput) {
+    els.profileManualIdInput.addEventListener('input', function() {
+      localStorage.setItem('wfm_profile_manual_id', els.profileManualIdInput.value.trim());
+    });
+  }
+
+  if (els.profilePlatformSelect) {
+    els.profilePlatformSelect.addEventListener('change', function() {
+      localStorage.setItem('wfm_profile_platform', els.profilePlatformSelect.value);
     });
   }
 
