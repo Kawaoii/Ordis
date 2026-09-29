@@ -96,10 +96,10 @@
   /* One fill for the whole window. The title bar and the shell are separate
      stacked elements, so when they were given different alphas a visible seam
      appeared across the join. Both read this now. */
-  --shell-fill: rgba(9, 16, 23, 0.62);
+  --shell-fill: rgba(9, 16, 23, 0.75);
 
   --font-display: 'Michroma', 'Rajdhani', 'Segoe UI', sans-serif;
-  --font-body: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'Michroma', 'Inter', 'Segoe UI', sans-serif;
 }
 
 :root,
@@ -238,10 +238,13 @@ body {
      app showed its source perfectly sharp through the grid. A real frosted
      desktop is therefore not reachable while the window is transparent.
 
-     That leaves tint as the only lever on background legibility, so 0.62 is a
-     compromise: the desktop still reads through as colour and shape, which is
-     most of what sells glass, but a bright window behind will be noticeably
-     visible. The rim and specular highlights below carry the rest of the effect.
+     That leaves tint as the only lever on background legibility. At 0.62 the
+     desktop was still clearly readable through the item grid - Explorer context
+     menus and filenames came through legibly, which is worse than no glass at
+     all. 0.75 is the value: the desktop still reads as colour and movement at
+     the window edges, but nothing behind the content is readable. The rim and
+     specular highlights below carry the rest of the effect.
+
      Rule 2 in ARCHITECTURE.md is kept - but its stated reason (compositor cost
      from 121 per-image filters) is not what is actually happening here. */
   background: var(--shell-fill) !important;
@@ -679,22 +682,28 @@ body.is-resizing .modal-overlay {
 /* ---- Tab strip ----
    Bottom-docked like the iOS dock rather than across the top: the top of the
    content area is already occupied by search and the filter pills, and a bar
-   there collided with them. It is offset by the sidebar so it spans the content
-   region only. */
+   there collided with them.
+
+   Centred on the window. It used to be offset by the sidebar and centred with
+   `left` + `right` + `width: max-content` + `margin: 0 auto`, which does not
+   work: with left, right and width all specified the box is over-constrained,
+   auto margins resolve to zero, and the strip sat 260px left of centre. The
+   sidebar is gone anyway, so centring on the window is both correct and what
+   was wanted. */
 .dock-strip {
   position: absolute;
   top: auto;
   bottom: 12px;
-  left: calc(var(--sidebar-width) + 16px);
-  right: 16px;
-  transform: none;
-  margin: 0 auto;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  margin: 0;
   width: max-content;
   display: flex;
   align-items: center;
   gap: 3px;
   padding: 4px;
-  max-width: calc(100% - var(--sidebar-width) - 32px);
+  max-width: calc(100% - 32px);
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -2017,6 +2026,159 @@ body.is-docking .dock-strip { opacity: 0.55; }
    Chrome legibility, rounded fields, depth, and item art
    ============================================================ */
 
+/* ---- Rounded corners, everywhere ----
+   The legacy theme carries 17 literal `border-radius: 0` declarations for the
+   wfui block - item cards, mod cards, the search clear button, modal close,
+   progress tracks and more. They are literal zeroes, not tokens, so raising
+   --radius-* does nothing for them. These are the specific selectors that carry
+   a zero, restored to the token. Anything rounded only via --radius-* was
+   already fixed by the token block above. */
+.nav-item.active::before,
+.scan-progress-track,
+.scan-progress-fill,
+.simaris-input-row,
+.search-clear,
+.mission-type-toggle,
+.item-card,
+.item-card-check,
+.item-level-btn,
+.mod-card.mod-card-modern,
+.mod-card-modern .mod-card-img-wrap,
+.modal-close,
+.starchart-nightwave-panel,
+.item-card.mastered::before,
+.item-card.mastered[data-mastery-label] .item-card-image::after,
+.item-card.mod-item.mastered .mod-card.mod-card-modern .mod-card-check {
+  border-radius: var(--radius-md) !important;
+}
+
+.scan-progress-fill,
+.item-card-check,
+.item-level-btn,
+.mod-card.mod-card-modern::after {
+  border-radius: var(--radius-sm) !important;
+}
+
+.search-clear,
+.nav-item.active::before {
+  border-radius: 50% !important;
+}
+
+/* Inputs across the app, including the ones the theme squared off.
+   The legacy sheet sets `border-radius: 0 !important` on a list that includes
+   `input[type="text"]`, which is specificity (0,1,1) and therefore beats a bare
+   `.search-input` at (0,1,0) - and when both carry !important, specificity is
+   what decides. Qualifying with the element and attribute type puts these at
+   (0,2,1) and they win. */
+input[type="text"].search-input,
+input[type="search"].search-input,
+input[type="text"].compare-search-input,
+input[type="text"].wfm-input,
+input[type="number"].wfm-input,
+input[type="email"].wfm-input,
+input[type="password"].wfm-input,
+input[type="text"].wfm-input,
+input[type="text"].simaris-input,
+input[type="text"].calc-input,
+input[type="text"].market-input,
+input[type="text"].relic-search-input,
+input[type="text"].arcane-search-input,
+input[type="text"].trade-analytics-input,
+input[type="text"].squad-input,
+input[type="number"].item-level-btn,
+input[type="number"].my-orders-input-plat,
+input[type="number"].my-orders-input-qty,
+textarea.wfm-input,
+select.wfm-input {
+  border-radius: 12px !important;
+}
+
+/* ---- Michroma needs smaller sizes than the face it replaced ----
+   Applied to both font tokens, so every element picks it up. The adjustments
+   below are where the wider cut overflows or becomes unreadable; each is a size
+   reduction rather than a different family, because a mixed set looks like a
+   mistake. */
+body,
+p,
+span,
+div,
+td,
+th,
+label,
+li {
+  letter-spacing: 0;
+}
+
+/* Values, counts and hints are the worst case: at the old sizes a single digit
+   cluster is unreadable in this face. */
+.market-item-tag,
+.market-cat-count,
+.category-count,
+.stat-label,
+.status-strip .stat-label,
+.orders-parts-heading,
+.my-orders-table thead th,
+.market-item-name,
+.item-drop-sub,
+.item-drop-qty,
+.modal-title,
+.settings-toggle-subtitle,
+.form-help,
+.search-input::placeholder,
+.wfm-input::placeholder {
+  font-size: 11px;
+  letter-spacing: 0;
+  line-height: 1.5;
+}
+
+.market-item-name,
+.my-orders-item-cell span {
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.market-cat-btn,
+.market-mode-btn {
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+/* Michroma is wide enough that the eight category pills wrapped onto a second
+   row, which pushed the grid down and made the top of the window busy. Tighten
+   the padding and let the row stay on one line; it scrolls if the window is
+   genuinely too narrow rather than reflowing. */
+.market-categories-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  min-width: 0;
+}
+
+.market-categories-list::-webkit-scrollbar {
+  display: none;
+}
+
+.market-cat-btn {
+  flex: 0 0 auto;
+  padding: 5px 11px;
+  white-space: nowrap;
+}
+
+.market-mode-btn {
+  flex: 0 0 auto;
+  padding: 7px 14px;
+  white-space: nowrap;
+}
+
+.btn {
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
 /* The top of the window sits over whatever is behind it, and at 0.62 fill the
    search row and the filter pills lost their contrast against a bright window -
    the small 11px labels were the worst affected, because thin strokes at that size
@@ -2168,4 +2330,302 @@ input[type="password"].wfm-input {
     font-family: var(--font-display);
     letter-spacing: 0.2px;
   }
+
+/* ============================================================
+   Market tiles: the art IS the tile
+   ------------------------------------------------------------
+   The card was a filled window with a picture floating inside it, which read as
+   "screenshot in a frame" rather than an item. Here the artwork fills the tile
+   and the glass is only the rim around it: a hairline, an inner highlight along
+   the top edge, and a soft shadow underneath. The chrome badge and the name sit
+   over the art instead of in a separate panel below it, so a row of tiles is a
+   row of items.
+   ============================================================ */
+.market-item-card {
+  position: relative;
+  min-height: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  overflow: hidden;
+  isolation: isolate;
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.45),
+    0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: transform var(--transition-fast, 150ms ease),
+              box-shadow var(--transition-fast, 150ms ease);
+}
+
+/* The glass rim: a border that reads as a lit edge, brightest along the top. */
+.market-item-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  border-radius: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 0 24px rgba(9, 16, 23, 0.55);
+}
+
+/* A dark scrim under the text at the foot of the tile, so a name stays readable
+   over bright artwork without dimming the item itself. The ramp is deliberately
+   long and shallow: a short one left a visible horizontal line part-way up the
+   artwork, which read as a seam across the item rather than as shading. */
+.market-item-card::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 78%;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(180deg,
+      rgba(6, 11, 16, 0) 0%,
+      rgba(6, 11, 16, 0.05) 18%,
+      rgba(6, 11, 16, 0.16) 34%,
+      rgba(6, 11, 16, 0.32) 48%,
+      rgba(6, 11, 16, 0.50) 60%,
+      rgba(6, 11, 16, 0.68) 72%,
+      rgba(6, 11, 16, 0.84) 86%,
+      rgba(6, 11, 16, 0.94) 100%);
+}
+
+.market-item-thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: none;
+  padding: 0;
+  background: none;
+}
+
+.market-item-thumb img {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: cover;
+  object-position: center;
+  filter: none;
+  transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.market-item-card:hover .market-item-thumb img {
+  transform: scale(1.06);
+}
+
+.market-item-card:hover {
+  transform: translateY(-3px);
+  box-shadow:
+    0 16px 34px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(94, 234, 212, 0.28);
+}
+
+.market-item-card:hover::before {
+  border-color: rgba(94, 234, 212, 0.42);
+}
+
+/* Name and category overlay the art rather than sitting under it. */
+.market-item-info {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  min-height: 0;
+  padding: 10px 12px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.market-item-name {
+  font-family: var(--font-display);
+  font-size: 10.5px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: #eaf4f8;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.market-item-tag {
+  font-family: var(--font-body);
+  font-size: 9.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: rgba(234, 244, 248, 0.62);
+  opacity: 1;
+}
+
+/* The tile needs a height now that it is no longer sized by its content. */
+.market-grid {
+  grid-auto-rows: 208px;
+}
+
+.market-grid > .market-item-card {
+  height: 208px;
+}
+
+/* The ownership / part-count badge sits over the art, top-left. */
+.market-item-card .market-item-tag,
+.market-item-card .mi-part-badge {
+  z-index: 4;
+}
+
+.market-item-card .mi-part-badge {
+  bottom: auto;
+  top: 8px;
+  right: 8px;
+  font-size: 9px;
+  padding: 2px 6px;
+  background: rgba(6, 11, 16, 0.78);
+  border-color: rgba(255, 255, 255, 0.18);
+  backdrop-filter: none;
+}
+
+/* ============================================================
+   Scrollbars
+   ------------------------------------------------------------
+   The default bar is drawn flush against the edge of the scroller and then
+   clipped by the shell's rounded corners, so it looked like it ran off the
+   window. Insetting it by the same amount as the surrounding padding keeps it
+   clear of the radius, and a thin track reads as part of the glass rather than
+   as a desktop control.
+   ============================================================ */
+.market-grid,
+.orders-body,
+.market-content,
+.content,
+.settings-content,
+.dock-float-body,
+.my-orders-table-container {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(94, 234, 212, 0.30) transparent;
+}
+
+.market-grid::-webkit-scrollbar,
+.orders-body::-webkit-scrollbar,
+.market-content::-webkit-scrollbar,
+.content::-webkit-scrollbar,
+.settings-content::-webkit-scrollbar,
+.dock-float-body::-webkit-scrollbar,
+.my-orders-table-container::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.market-grid::-webkit-scrollbar-track,
+.orders-body::-webkit-scrollbar-track,
+.market-content::-webkit-scrollbar-track,
+.content::-webkit-scrollbar-track,
+.settings-content::-webkit-scrollbar-track,
+.dock-float-body::-webkit-scrollbar-track,
+.my-orders-table-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.market-grid::-webkit-scrollbar-thumb,
+.orders-body::-webkit-scrollbar-thumb,
+.market-content::-webkit-scrollbar-thumb,
+.content::-webkit-scrollbar-thumb,
+.settings-content::-webkit-scrollbar-thumb,
+.dock-float-body::-webkit-scrollbar-thumb,
+.my-orders-table-container::-webkit-scrollbar-thumb {
+  background: rgba(94, 234, 212, 0.26);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.market-grid::-webkit-scrollbar-thumb:hover,
+.orders-body::-webkit-scrollbar-thumb:hover,
+.market-content::-webkit-scrollbar-thumb:hover,
+.content::-webkit-scrollbar-thumb:hover,
+.settings-content::-webkit-scrollbar-thumb:hover,
+.dock-float-body::-webkit-scrollbar-thumb:hover,
+.my-orders-table-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(94, 234, 212, 0.45);
+  background-clip: content-box;
+}
+
+.market-grid::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+   ------------------------------------------------------------
+   The category header sat on a hard-edged band, so it read as a separate strip
+   floating above the tiles rather than as the top of the same surface. The
+   gradient now runs from the shell fill into fully transparent with no stop at
+   the boundary, and the grid's first row tucks under it.
+   ============================================================ */
+.category-header {
+  position: relative;
+  z-index: 5;
+  border-bottom: 0;
+  background: linear-gradient(180deg,
+      rgba(6, 11, 16, 0.55) 0%,
+      rgba(6, 11, 16, 0.30) 55%,
+      rgba(6, 11, 16, 0) 100%);
+  padding-bottom: 18px;
+  margin-bottom: 0;
+}
+
+.market-content,
+.market-grid {
+  position: relative;
+}
+
+.market-grid {
+  padding-top: 0;
+}
+
+/* The ownership filter row was plain text-on-nothing and sat on the banner
+   gradient. Given the same pill treatment as the category filters so the two
+   rows read as one control group. */
+.market-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 0 0;
+}
+
+.market-filter-btn {
+  font-family: var(--font-display);
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--text-dim);
+  background: rgba(6, 11, 16, 0.62);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 5px 14px;
+  cursor: pointer;
+  transition: background var(--transition-fast, 150ms ease),
+              color var(--transition-fast, 150ms ease),
+              border-color var(--transition-fast, 150ms ease);
+}
+
+.market-filter-btn:hover {
+  color: var(--text-main, #eaf4f8);
+  background: rgba(14, 24, 33, 0.78);
+}
+
+.market-filter-btn.active {
+  color: #0a1016;
+  background: rgba(94, 234, 212, 0.85);
+  border-color: rgba(94, 234, 212, 0.9);
+}
 
