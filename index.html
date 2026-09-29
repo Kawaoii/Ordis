@@ -1167,10 +1167,10 @@
 
           <label class="settings-toggle-row" for="setting-riven-overlay" style="margin-top: 16px;">
             <div>
-              <div class="settings-toggle-title">Riven Grading Overlay (Beta)</div>
+              <div class="settings-toggle-title">Riven Grading</div>
               <div class="settings-toggle-subtitle">
-                Watches EE.log for riven reroll screens and displays automatic grading and pricing from warframe.market.
-                Works best with Warframe in borderless or windowed mode.
+                Grades the riven you just rerolled and shows what people are asking for it.
+                Reads your Warframe log and takes a screenshot of the stat panel.
               </div>
             </div>
             <input type="checkbox" id="setting-riven-overlay" class="settings-toggle-input">
@@ -1183,16 +1183,16 @@
             <span>Riven overlay disabled.</span>
           </div>
 
-          <div style="margin-top: 12px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 6px;">
-            <label style="display: block; margin-bottom: 6px; font-size: 13px; color: rgba(255,255,255,0.7);">
-              Capture Display (Quality of Life)
-            </label>
-            <select id="riven-display-select" style="width: 100%; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: #fff; font-size: 13px;">
-              <option value="">Auto-detect (recommended)</option>
-            </select>
-            <div style="margin-top: 6px; font-size: 12px; color: rgba(255,255,255,0.5);">
-              If auto-detection fails, manually select which display Warframe is on.
-            </div>
+          <div class="riven-overlay-hint">
+            Warframe needs to have run at least once, and needs to be in
+            borderless or windowed mode so the stat panel is readable.
+          </div>
+          <label class="riven-display-label" for="riven-display-select">Capture display</label>
+          <select id="riven-display-select" class="riven-display-select">
+            <option value="">Auto-detect (recommended)</option>
+          </select>
+          <div class="riven-overlay-hint">
+            If auto-detection picks the wrong screen, choose the one Warframe is on.
           </div>
         </div>
 

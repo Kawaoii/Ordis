@@ -7735,7 +7735,7 @@ const visibilityTickHandles = new Set();
       setRivenOverlayStatus(
         rivenOverlayEnabled ? 'active' : '',
         rivenOverlayEnabled
-          ? 'Watching EE.log for riven rerolls. Keep Warframe in borderless/windowed mode.'
+          ? 'Waiting for a riven reroll. Keep Warframe in borderless/windowed mode.'
           : 'Riven overlay disabled.'
       );
       if (!result || !result.ok) {
@@ -7783,6 +7783,9 @@ const visibilityTickHandles = new Set();
     }
   }
 
+  // gradeRivenScan() in the main process returns `parsed` (the raw OCR read) and
+  // `grade` (the engine verdict). It does not return a `riven` object, a price or
+  // a listing string, so this reads the two fields that actually exist.
   function handleRivenScanResult(payload) {
     if (!payload || !payload.success) {
       if (payload && payload.stage === 'ocr' && payload.text) {
@@ -7792,126 +7795,96 @@ const visibilityTickHandles = new Set();
       return;
     }
 
-    const { riven, grade, price, listingText } = payload;
-    if (!riven || !Array.isArray(riven.stats) || !grade) {
+    const parsed = payload.parsed;
+    const grade = payload.grade;
+    if (!parsed || !Array.isArray(parsed.stats) || !grade) {
       console.log('[RivenOverlay] Ignoring incomplete scan result:', payload);
       return;
     }
-    console.log('[RivenOverlay] Scan result received:', { riven, grade, price });
+    console.log('[RivenOverlay] Scan result received:', { grade: grade.grade, score: grade.score });
 
-    // Create or update a notification/toast with the riven grade and price
-    showRivenGradeNotification(riven, grade, price, listingText);
+    showRivenGradeNotification(parsed, grade, payload.partialCaveat || '');
   }
 
-  function showRivenGradeNotification(riven, grade, price, listingText) {
-    // Remove any existing notification
+  // The stat panel is only on screen for a moment after a reroll, so the text
+  // arrives from OCR and cannot be trusted to be well formed. Everything that
+  // reaches innerHTML below goes through this.
+  function escapeRivenText(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function removeRivenGradeNotification() {
     const existing = document.getElementById('riven-grade-notification');
     if (existing) existing.remove();
+  }
 
-    const gradeColors = { S: '#00d4aa', A: '#4f9eff', B: '#ff8c42', C: '#ff4757' };
-    const gradeColor = gradeColors[grade.grade] || '#a8abb2';
+  function showRivenGradeNotification(parsed, grade, caveat) {
+    removeRivenGradeNotification();
+
+    // parseStatLine() reports the sign on isPositive and carries no polarity
+    // glyph, so the marker is derived here rather than read off the stat.
+    const statsHtml = parsed.stats.map(function(s) {
+      const sign = s.isPositive ? 'positive' : 'negative';
+      const marker = s.isPositive ? '+' : '-';
+      return '<div class="riven-grade-card__stat" data-sign="' + sign + '">' +
+        '<span class="riven-grade-card__stat-name">' + escapeRivenText(s.name) + '</span>' +
+        '<span class="riven-grade-card__stat-value">' + marker +
+        escapeRivenText(s.value) + '%</span>' +
+        '</div>';
+    }).join('');
+
+    // Perfectness is how much of the best possible roll this is, which is the
+    // number people actually compare rivens on. It needs a known weapon
+    // disposition, so it stays hidden rather than shown as zero.
+    let perfectnessHtml = '';
+    if (grade.perfectnessKnown && grade.perfectness != null) {
+      perfectnessHtml = '<span class="riven-grade-card__perfect">' +
+        escapeRivenText(grade.perfectness) + '% of max roll</span>';
+    }
+
+    let reasonsHtml = '';
+    if (Array.isArray(grade.reasons) && grade.reasons.length) {
+      reasonsHtml = '<ul class="riven-grade-card__reasons">' +
+        grade.reasons.slice(0, 3).map(function(reason) {
+          return '<li>' + escapeRivenText(reason) + '</li>';
+        }).join('') +
+        '</ul>';
+    }
+
+    let caveatHtml = '';
+    if (caveat) {
+      caveatHtml = '<p class="riven-grade-card__caveat">' + escapeRivenText(caveat) + '</p>';
+    }
 
     const notification = document.createElement('div');
     notification.id = 'riven-grade-notification';
-    notification.style.cssText = `
-      position: fixed;
-      top: 80px;
-      right: 24px;
-      z-index: 10000;
-      width: 360px;
-      background: linear-gradient(135deg, #1a1c23 0%, #0f1115 100%);
-      border: 2px solid ${gradeColor};
-      border-radius: 12px;
-      padding: 16px;
-      color: #e4e6ea;
-      font-family: 'Rajdhani', sans-serif;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05);
-      animation: slideIn 0.3s ease-out;
-    `;
-
-    const statsHtml = riven.stats.map(s => `
-      <div style="
-        background:rgba(255,255,255,0.03);
-        padding:4px 8px;
-        border-radius:4px;
-        border-left:3px solid ${s.isPositive ? '#2ed573' : '#ff4757'};
-        margin: 2px 0;
-      ">
-        <span style="color:#a8abb2;">${s.name}</span>
-        <span style="color:${s.isPositive ? '#2ed573' : '#ff4757'}; font-weight:600; margin-left:8px;">${s.polarity}${s.value}%</span>
-      </div>
-    `).join('');
-
-    const priceHtml = price && price.ok && price.minPrice ? `
-      <div style="margin-top:10px; padding-top:10px; border-top:1px solid #2a2d35; font-size:11px; color:#ffd700; display:flex; justify-content:space-between; align-items:center;">
-        <span>💎 ${price.minPrice}p - ${price.avgPrice}p (${price.count} listings)</span>
-        <button id="riven-copy-listing" style="
-          background:rgba(79,158,255,0.2);
-          border:1px solid #4f9eff;
-          color:#4f9eff;
-          padding:4px 10px;
-          border-radius:4px;
-          font-size:10px;
-          cursor:pointer;
-          font-family:'Rajdhani',sans-serif;
-        ">Copy Listing</button>
-      </div>
-    ` : '';
-
-    notification.innerHTML = `
-      <style>
-        @keyframes slideIn {
-          from { transform: translateX(100%); opacity: 0; }
-          to { transform: translateX(0); opacity: 1; }
-        }
-        #riven-grade-notification button:hover { background:#4f9eff !important; color:#0a0b0d !important; }
-      </style>
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-        <div style="font-weight:700; font-size:14px; color:#a8abb2;">RIVEN GRADED</div>
-        <div style="
-          background:${gradeColor};
-          color:#0a0b0d;
-          font-weight:700;
-          font-size:28px;
-          font-family:'JetBrains Mono',monospace;
-          padding:4px 16px;
-          border-radius:6px;
-          letter-spacing:2px;
-        ">${grade.grade}</div>
-      </div>
-      <div style="font-size:12px; color:#6b7280; margin-bottom:8px;">Score: ${grade.score} | ${riven.weaponName}</div>
-      <div style="font-size:11px; color:#4f9eff; margin-bottom:8px;">${riven.rivenName || 'Unnamed Riven'}</div>
-      <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:6px; font-size:11px;">
-        ${statsHtml}
-      </div>
-      ${priceHtml}
-    `;
+    notification.className = 'riven-grade-card';
+    notification.setAttribute('role', 'status');
+    notification.innerHTML =
+      '<div class="riven-grade-card__head">' +
+        '<span class="riven-grade-card__eyebrow">Riven graded</span>' +
+        '<span class="riven-grade-card__badge" data-grade="' +
+          escapeRivenText(grade.grade) + '">' + escapeRivenText(grade.grade) + '</span>' +
+      '</div>' +
+      '<div class="riven-grade-card__meta">' +
+        escapeRivenText(grade.gradeLabel || grade.grade) +
+        ' &middot; score ' + escapeRivenText(grade.score) +
+        perfectnessHtml +
+      '</div>' +
+      '<div class="riven-grade-card__weapon">' +
+        escapeRivenText(parsed.rivenName || parsed.weaponName || 'Riven') + '</div>' +
+      '<div class="riven-grade-card__stats">' + statsHtml + '</div>' +
+      reasonsHtml +
+      caveatHtml;
 
     document.body.appendChild(notification);
 
-    // Add copy listing functionality
-    const copyBtn = notification.querySelector('#riven-copy-listing');
-    if (copyBtn && listingText) {
-      copyBtn.addEventListener('click', () => {
-        navigator.clipboard.writeText(listingText).then(() => {
-          copyBtn.textContent = 'Copied!';
-          copyBtn.style.background = '#2ed573';
-          copyBtn.style.borderColor = '#2ed573';
-          copyBtn.style.color = '#0a0b0d';
-          setTimeout(() => {
-            if (document.getElementById('riven-grade-notification')) {
-              document.getElementById('riven-grade-notification').remove();
-            }
-          }, 2000);
-        });
-      });
-    }
-
-    // Auto-remove after 15 seconds
-    setTimeout(() => {
-      const notif = document.getElementById('riven-grade-notification');
-      if (notif) notif.remove();
-    }, 15000);
+    setTimeout(removeRivenGradeNotification, 15000);
   }
 
   function readFileAsDataUrl(file) {

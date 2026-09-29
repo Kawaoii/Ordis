@@ -2719,3 +2719,195 @@ input[type="password"].wfm-input {
   border-color: rgba(94, 234, 212, 0.9);
 }
 
+
+/* ============================================================
+   Riven grade card
+   ------------------------------------------------------------
+   The grading overlay fires while the player is in the middle of a
+   reroll, so this card is the only thing they read in a hurry. It was
+   built with inline hex colours and a different font, which made it the
+   one surface in the app that did not look like Ordis, and it inherited
+   nothing from the design tokens. It now sits on the same shell fill,
+   rim and font as everything else, and the grade letter keeps the
+   palette that carries the meaning: teal, blue, gold, red.
+   ============================================================ */
+/* A card that floats over live content needs to be near-opaque. The shell fill
+   is tuned to sit over the desktop, so at 0.75 the item tiles and their labels
+   read straight through a card laid on top of them. */
+.riven-grade-card {
+  position: fixed;
+  top: 80px;
+  right: 24px;
+  z-index: 10000;
+  width: 380px;
+  box-sizing: border-box;
+  padding: 14px 16px 12px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(16, 24, 33, 0.97) 0%, rgba(9, 16, 23, 0.97) 100%);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.55), var(--glass-rim);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  animation: riven-grade-in 0.3s ease-out;
+}
+
+@keyframes riven-grade-in {
+  from { transform: translateX(18px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.riven-grade-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.riven-grade-card__eyebrow {
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.riven-grade-card__badge {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  padding: 5px 14px;
+  border-radius: 9px;
+  color: #0a1016;
+  background: var(--riven-grade-color, var(--text-dim));
+}
+
+/* The grade letter is the one thing worth reading from across the desk, so each
+   band gets a colour that also survives a glance at the border. */
+.riven-grade-card__badge[data-grade="S"] { --riven-grade-color: #5eead4; }
+.riven-grade-card__badge[data-grade="A"] { --riven-grade-color: #7dd3fc; }
+.riven-grade-card__badge[data-grade="B"] { --riven-grade-color: #fbbf24; }
+.riven-grade-card__badge[data-grade="C"] { --riven-grade-color: #fb7185; }
+
+.riven-grade-card__meta {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* Perfectness is the headline number for anyone comparing two rivens, so it
+   gets the accent colour rather than sitting in the dim metadata line. */
+.riven-grade-card__perfect {
+  color: var(--text-accent);
+}
+
+.riven-grade-card__weapon {
+  font-size: 12px;
+  color: var(--text-accent);
+  margin-bottom: 8px;
+}
+
+.riven-grade-card__reasons {
+  margin: 8px 0 0;
+  padding: 0 0 0 14px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.riven-grade-card__caveat {
+  margin: 8px 0 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--gold);
+}
+
+.riven-grade-card__weapon {
+  font-size: 12px;
+  color: var(--text-accent);
+  margin-bottom: 8px;
+}
+
+.riven-grade-card__stats {
+  display: grid;
+  /* One column, not two. Riven stat names are long ("Extra Physical Damage",
+     "Damage Against Factions") and the name is the thing being compared
+     between two rivens, so it gets the full width rather than an ellipsis. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  font-size: 11px;
+}
+
+.riven-grade-card__stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border-left: 2px solid var(--riven-stat-color, var(--border-color));
+}
+
+.riven-grade-card__stat[data-sign="positive"] { --riven-stat-color: #4ade80; }
+.riven-grade-card__stat[data-sign="negative"] { --riven-stat-color: #fb7185; }
+
+.riven-grade-card__stat-name {
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.riven-grade-card__stat-value {
+  color: var(--riven-stat-color, var(--text-primary));
+  flex: none;
+}
+
+/* ============================================================
+   Riven settings row
+   ------------------------------------------------------------
+   The overlay toggle shipped as a beta feature sitting in the middle of
+   the settings list with no explanation of what it reads, so it read as
+   an experiment rather than a feature. The hint now names the log and
+   the capture it depends on, because a toggle that silently does nothing
+   when the game has never launched is the most likely way to dismiss it.
+   ============================================================ */
+.riven-overlay-hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  margin-top: 6px;
+}
+
+.riven-display-label {
+  display: block;
+  margin: 12px 0 6px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.riven-display-select {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--text-primary);
+  background: rgba(6, 11, 16, 0.6);
+  border: 1px solid var(--border-color);
+}
+
+.riven-display-select:hover,
+.riven-display-select:focus {
+  border-color: var(--border-accent);
+}
