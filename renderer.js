@@ -17853,6 +17853,12 @@ card.addEventListener('auxclick', function(e) {
   initAutoUpdateSetting();
   initProfileFetchSetting();
   initRemovedProfileStorageMigration();
+  // Restore the Warframe.market session at startup. Deliberately not behind the
+  // market module's lazy init: that only runs when the Market tab is first opened,
+  // which left every authenticated call answering 401 for the rest of the session.
+  if (window.warframeMarket && typeof window.warframeMarket.rehydrateSession === 'function') {
+    window.warframeMarket.rehydrateSession();
+  }
   // ---------- Frame Comparison ----------
   var compareInitialized = false;
   var compareLeftFrame = null;

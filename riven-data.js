@@ -20,10 +20,15 @@ const RIVEN_WEAPONS_URL = 'https://api.warframe.market/v2/riven/weapons';
 const RIVEN_DATA_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const RIVEN_FETCH_TIMEOUT_MS = 20000;
 
+// Warframe.market asks clients to identify themselves with a descriptive
+// User-Agent rather than impersonating a browser, and hides crossplay data
+// unless it is requested explicitly.
 const RIVEN_FETCH_HEADERS = {
   'Accept': 'text/csv,application/json',
-  'User-Agent': 'Warframe Companion App',
-  'Platform': 'pc'
+  'User-Agent': 'Ordis (+https://github.com/Kawaoii/Ordis)',
+  'Platform': 'pc',
+  'Language': 'en',
+  'Crossplay': 'true'
 };
 
 /**
@@ -619,7 +624,7 @@ async function getRivenData(options) {
   }
 
   const [sheetResponse, weaponsResponse] = await Promise.all([
-    fetchWithTimeout(RIVEN_GRADES_SHEET_URL, { headers: { 'User-Agent': 'Warframe Companion App' } }),
+    fetchWithTimeout(RIVEN_GRADES_SHEET_URL, { headers: { 'User-Agent': RIVEN_FETCH_HEADERS['User-Agent'] } }),
     fetchWithTimeout(RIVEN_WEAPONS_URL, { headers: RIVEN_FETCH_HEADERS })
   ]);
 

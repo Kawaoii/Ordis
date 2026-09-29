@@ -1893,8 +1893,10 @@ function saveMarketFilterState() {
     };
   }
 
+  // Crossplay is absent by default server-side, so omitting it silently drops
+  // every crossplay order from the results.
   function contractsApiHeaders() {
-    return { Platform: 'pc', Language: 'en' };
+    return { Platform: 'pc', Language: 'en', Crossplay: 'true' };
   }
 
   async function fetchContractsJson(url) {
@@ -2180,7 +2182,7 @@ function saveMarketFilterState() {
     var owner = auction && auction.owner ? auction.owner : {};
     var item = auction && auction.item ? auction.item : {};
     var searchParts = [
-      owner.ingame_name,
+      wfmIngameName(owner),
       item.name,
       item.weapon_url_name,
       item.element,
@@ -2598,7 +2600,7 @@ function saveMarketFilterState() {
       }
     }
 
-    return '/w ' + (owner.ingame_name || 'Unknown') + ' Hi! I want to buy your ' + itemLabel + priceClause + '. (warframe companion app)';
+    return '/w ' + (wfmIngameName(owner) || 'Unknown') + ' Hi! I want to buy your ' + itemLabel + priceClause + '. (warframe companion app)';
   }
 
   async function copyContractWhisper(auction) {
@@ -2800,7 +2802,7 @@ function saveMarketFilterState() {
     seller.appendChild(dot);
     var sellerName = document.createElement('span');
     sellerName.className = 'contracts-seller-name';
-    sellerName.textContent = owner.ingame_name || 'Unknown';
+    sellerName.textContent = wfmIngameName(owner) || 'Unknown';
     seller.appendChild(sellerName);
     var sellerState = document.createElement('span');
     sellerState.textContent = String(owner.status || 'offline').toUpperCase();
@@ -4868,7 +4870,7 @@ function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
       // Player
       var playerCol = document.createElement('div');
       playerCol.className = 'order-col order-player';
-      playerCol.textContent = o.user ? o.user.ingame_name : 'Unknown';
+      playerCol.textContent = wfmIngameName(o.user) || 'Unknown';
 
       var rankCol = null;
       if (showRankColumn) {
@@ -4921,7 +4923,7 @@ function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
   }
 
   function buildWhisperMessage(order, orderType, itemName) {
-    var player = order && order.user ? order.user.ingame_name : 'Unknown';
+    var player = wfmIngameName(order && order.user) || 'Unknown';
     var price = order && typeof order.platinum !== 'undefined' ? String(order.platinum) : '?';
     var rank = getOrderRankValue(order);
     var rankedItemName = rank === null ? itemName : (itemName + ' rank ' + rank);
@@ -5226,7 +5228,7 @@ function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
     if (wfmSession.token && wfmSession.user) {
       if (connectBtn) connectBtn.classList.add('hidden');
       if (userBadge) userBadge.classList.remove('hidden');
-      if (usernameLabel) usernameLabel.textContent = wfmSession.user.ingame_name || 'Connected';
+      if (usernameLabel) usernameLabel.textContent = wfmIngameName(wfmSession.user) || 'Connected';
       if (myOrdersBtn) myOrdersBtn.classList.remove('hidden');
       updateStatusSelectorUI();
     } else {
@@ -5359,6 +5361,16 @@ function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
     }
   }
 
+  // The v2 API returns `ingameName`; the v1 shape used `ingame_name`. Code written
+  // against v1 read only the snake_case form, so seller names rendered as "Unknown",
+  // the account badge showed "Connected" instead of the player's name, and
+  // isMyOwnOrder() never matched anything, which hid your own listings in the
+  // orders table. Read both here so the casing cannot drift across call sites.
+  function wfmIngameName(user) {
+    if (!user) return '';
+    return String(user.ingameName || user.ingame_name || '').trim();
+  }
+
   async function wfmFetch(url, options) {
     options = options || {};
     options.headers = options.headers || {};
@@ -5466,13 +5478,13 @@ function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
     section.appendChild(title);
 
     var showRankColumn = itemSupportsOrderRank(itemMeta, sellOrders, buyOrders);
-    var username = (wfmSession.user && wfmSession.user.ingame_name || '').toLowerCase();
+    var username = wfmIngameName(wfmSession.user).toLowerCase();
 
     var activeMyOrders = [];
     if (username) {
       var allOrders = [].concat(sellOrders || [], buyOrders || []);
       activeMyOrders = allOrders.filter(function (o) {
-        return o.user && o.user.ingame_name && o.user.ingame_name.toLowerCase() === username;
+        return wfmIngameName(o.user).toLowerCase() === username;
       });
     }
 
@@ -6418,9 +6430,50 @@ function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
     );
   }
 
+  // The main process only learns the token via wfm-set-cookie, and that used to be
+  // called from connectWfmSocket(), which sits behind initMarket(). The market module
+  // initialises lazily on first visit, so after a restart the main process held no
+  // token and every authenticated call answered 401 until the user happened to open
+  // the Market tab. Rehydrating here means the session is usable immediately.
+  async function rehydrateWfmSession() {
+    if (wfmSession.token) return true;
+    if (typeof window.electronAPI === 'undefined' || typeof window.electronAPI.wfmSetCookie !== 'function') {
+      return false;
+    }
+
+    var token = '';
+    try {
+      token = String(localStorage.getItem('wfm_jwt_token') || '').trim();
+    } catch (err) {
+      return false;
+    }
+    if (!token) return false;
+
+    try {
+      var res = await window.electronAPI.wfmSetCookie(token);
+      if (res && res.ok) {
+        wfmSession.token = token;
+        wfmSession.user = res.user || wfmSession.user;
+        // Without this the header keeps showing "Connect Account" and the My Orders
+        // button stays hidden, so the session looked logged out even though every
+        // request was authenticated.
+        updateWfmHeaderUI();
+        return true;
+      }
+      // An expired token is the common case here, so drop it rather than leaving a
+      // dead session that fails on every call.
+      if (res && res.message) console.warn('Stored Warframe.market session is no longer valid:', res.message);
+      disconnectWfm();
+      return false;
+    } catch (err) {
+      return false;
+    }
+  }
+
   // Expose globally
   window.warframeMarket = {
     init: initMarket,
+    rehydrateSession: rehydrateWfmSession,
     load: loadMarketItems,
     loadAnalytics: loadTradeAnalytics,
     openItemByName: openItemByName,

@@ -61,6 +61,58 @@ let wfmLoginWindow;
  * proven the token actually works, and it is never logged.
  */
 let wfmSessionToken = '';
+
+/**
+ * Warframe.market request headers, in one place.
+ *
+ * These were previously written out separately at each call site and had drifted
+ * apart, which is how the authentication bug survived: one place verified a
+ * session with a cookie, another deleted the Authorization header outright, and a
+ * third went out with no identifying header at all.
+ *
+ * Per the published API contract:
+ *  - Requests must carry a descriptive User-Agent. Impersonating a browser is
+ *    explicitly forbidden and is grounds for being blocked, so this never lies
+ *    about being Chrome.
+ *  - Authenticated calls send `Authorization: Bearer <jwt>`. The legacy JWT
+ *    cookie is sent too, because the site still honours it and dropping it
+ *    regressed verified sessions.
+ *  - Crossplay defaults to false server-side, so without this header every
+ *    crossplay order is silently missing for PC-side buyers.
+ */
+const WFM_API_BASE = 'https://api.warframe.market/v2/';
+
+function wfmUserAgent() {
+  let version = '';
+  try {
+    version = String(app.getVersion() || '').trim();
+  } catch (err) {
+    version = '';
+  }
+  const label = 'Ordis' + (version ? '/' + version : '');
+  return label + ' (+https://github.com/Kawaoii/Ordis)';
+}
+
+function wfmHeaders(extra) {
+  return Object.assign({
+    'Accept': 'application/json',
+    'User-Agent': wfmUserAgent(),
+    'Platform': 'pc',
+    'Language': 'en',
+    'Crossplay': 'true'
+  }, extra || {});
+}
+
+/** Adds both documented and legacy auth to a header set, if a token is known. */
+function wfmAuthHeaders(headers, token) {
+  const raw = String(token || '').trim();
+  if (!raw) return headers;
+  const bare = raw.startsWith('JWT ') ? raw.slice(4).trim() : raw;
+  if (!bare) return headers;
+  headers['Authorization'] = 'Bearer ' + bare;
+  headers['Cookie'] = 'JWT=' + bare;
+  return headers;
+}
 const DEFAULT_MIN_WIDTH = 1024;
 const DEFAULT_MIN_HEIGHT = 640;
 // The topbar carries a search field plus nine filter controls, two status pills
@@ -2881,22 +2933,23 @@ ipcMain.handle('wfm-fetch', async (_event, url, options) => {
     options = options || {};
     options.headers = options.headers || {};
 
-    const authHeader = options.headers['Authorization'] || options.headers['authorization'] || '';
-    let cookieToken = '';
-    if (authHeader) {
-      cookieToken = authHeader.startsWith('JWT ') ? authHeader.substring(4).trim() : authHeader.trim();
-      delete options.headers['Authorization'];
-      delete options.headers['authorization'];
-    }
+    // A caller may pass Authorization in either the documented
+    // "Bearer <jwt>" form or as a bare token; normalise both to the bare jwt.
+    const supplied = options.headers['Authorization'] || options.headers['authorization'] || '';
+    delete options.headers['Authorization'];
+    delete options.headers['authorization'];
+    let token = String(supplied).trim();
+    if (/^Bearer\s+/i.test(token)) token = token.replace(/^Bearer\s+/i, '').trim();
+    if (token.startsWith('JWT ')) token = token.slice(4).trim();
 
     // Fall back to the verified session when the caller did not pass one
     // explicitly. Without this the stored session was never sent, because the
     // cookie jar and undici do not share state.
-    if (!cookieToken) cookieToken = wfmSessionToken;
-    if (cookieToken) options.headers['Cookie'] = 'JWT=' + cookieToken;
+    if (!token) token = wfmSessionToken;
+    wfmAuthHeaders(options.headers, token);
 
+    Object.assign(options.headers, wfmHeaders());
     options.headers['Accept'] = 'application/json';
-    options.headers['Platform'] = 'pc';
 
     const resp = await fetch(url, options);
     const status = resp.status;
@@ -2958,14 +3011,7 @@ async function verifyWfmTokenInMain(token) {
 
   try {
     const resp = await fetch('https://api.warframe.market/v2/me', {
-      headers: {
-        'Accept': 'application/json',
-        'Platform': 'pc',
-        'Language': 'en',
-        // warframe.market authenticates API calls with the JWT cookie. The
-        // Authorization header alone is not accepted by every endpoint.
-        'Cookie': 'JWT=' + tokenOnly
-      }
+      headers: wfmAuthHeaders(wfmHeaders(), tokenOnly)
     });
 
     if (resp.status === 401 || resp.status === 403) {

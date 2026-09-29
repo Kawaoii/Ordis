@@ -6,7 +6,61 @@ is not lost once the person who wrote it moves on.
 
 ---
 
+## 2026-09-29 — Warframe.market session restoration, attribution, docs
+
+### Bugs found and fixed
+
+| Bug | Cause | Fix |
+|---|---|---|
+| **Every authenticated call 401'd after a restart** | the main process only learns the token through `wfm-set-cookie`, which was called from `connectWfmSocket()` inside `initMarket()`. The market module initialises lazily on first visit, so until the user opened the Market tab the main process held no token and every session request went out anonymous | `rehydrateWfmSession()` restores the stored token at startup, independent of the market UI |
+| Rehydrated session still looked logged out | the restore path set the session but never refreshed the header, so the button stayed hidden and the UI read as disconnected | call `updateWfmHeaderUI()` after a successful restore |
+| `Authorization` header was deleted before sending | `wfm-fetch` stripped the caller's header and sent only a legacy `JWT` cookie, so the documented auth method was never used | send `Authorization: Bearer <jwt>` **and** the cookie, normalising `Bearer`/`JWT `/bare input |
+| Player names rendered as "Unknown" or "Connected" | v2 returns `ingameName`; the code read only the v1 `ingame_name` | `wfmIngameName()` reads both, used everywhere |
+| **Your own listings were hidden in the orders table** | `isMyOwnOrder()` compared `user.ingame_name`, always undefined, so nothing ever matched | same helper, so the comparison actually runs |
+| Crossplay orders silently missing | the `Crossplay` header defaults to false server-side and was never sent | sent on all Warframe.market requests |
+| Inconsistent request headers | written out separately per call site and had drifted apart | one `wfmHeaders()` / `wfmAuthHeaders()` pair in `main.js` |
+
+### Rules compliance
+
+Warframe.market asks clients to identify themselves and forbids impersonating a
+browser. `User-Agent` is now `Ordis/<version> (+https://github.com/Kawaoii/Ordis)`
+everywhere, replacing both a version-less string and a spoofed `Chrome/120` UA.
+
+**The credentials login path cannot be made to work and should be removed.**
+`POST /auth/signin` is first-party only and requires Firebase App Check, and
+OAuth 2.0 is not open to public integrations yet. That flow scrapes the login page
+with a fake browser UA, which is both against the rules and exactly what
+Cloudflare is built to block. The interactive browser window is the supported
+approach and already works.
+
+### Verified
+
+Cold start with no re-login: `/v2/me` **200** as `R3DTAIL_GHOUL`,
+`/v2/orders/my?order_type=sell` **200** (7), `?order_type=buy` **200** (7).
+Market grid 200 cards. My Orders renders 8 rows with all 7 thumbnails loaded.
+
+### Also done
+
+- About screen in Settings carrying the upstream credit, licence name and Digital
+  Extremes disclaimer, as the licence requires.
+- The inherited "Message me on Telegram" button pointed at the original author's
+  personal contact, so a user's bug report would have reached a third party.
+  Replaced with a link to this fork's issue tracker.
+- `appId` is now `io.github.kawaoii.ordis`; safe to change because no releases had
+  been published, so no existing install could be stranded.
+- Docs renamed to `docs/ARCHITECTURE.md` and `docs/CHANGELOG.md`.
+
+### Not done
+
+- The credentials login path is still present; it should be deleted in favour of
+  the browser window.
+- Set grouping still uses a hardcoded part-word list. The v2 Item model exposes
+  `setRoot`, `setParts` and `quantityInSet`, which would be authoritative.
+
+---
+
 ## 2026-09-28 — Liquid Glass redesign + dock system
+
 
 ### Goal
 Rebrand the UI as iOS "Liquid Glass" (cool teal/steel, rounded, no red), make
