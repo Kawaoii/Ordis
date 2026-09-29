@@ -998,12 +998,17 @@ function saveMarketFilterState() {
   }
 
   // Tag → Category mapping
+  //
+  // Prime sets and prime parts used to be two categories. That split made no sense
+  // once the grid groups a weapon together with its components: both filters then
+  // showed the same set cards, differing only in whether a part matched. The parts
+  // are reachable by opening their set, which is where they belong, so there is one
+  // Prime category now.
   function getMarketCategory(tags) {
     if (!tags) return 'misc';
     if (tags.includes('mod') || tags.includes('stance') || tags.includes('aura')) return 'mods';
     if (tags.includes('arcane_enhancement') || tags.includes('arcane_helmet')) return 'arcanes';
-    if (tags.includes('set') && tags.includes('prime')) return 'prime_sets';
-    if (tags.includes('prime') && (tags.includes('blueprint') || tags.includes('component'))) return 'prime_parts';
+    if (tags.includes('prime') && (tags.includes('set') || tags.includes('blueprint') || tags.includes('component'))) return 'prime';
     if (tags.includes('riven_mod')) return 'rivens';
     if (tags.includes('weapon') || tags.includes('set')) return 'weapons';
     if (tags.includes('blueprint')) return 'blueprints';
@@ -1129,7 +1134,9 @@ function saveMarketFilterState() {
   function isPrimeSetItem(item) {
     if (!item) return false;
     var tags = Array.isArray(item.tags) ? item.tags : [];
-    return item.category === 'prime_sets' || (tags.indexOf('prime') !== -1 && tags.indexOf('set') !== -1);
+    if (tags.indexOf('prime') === -1) return false;
+    if (item.category === 'prime') return tags.indexOf('set') !== -1;
+    return false;
   }
 
   function findPrimeSetParts(setItem) {
@@ -1142,7 +1149,11 @@ function saveMarketFilterState() {
     for (var i = 0; i < marketItems.length; i++) {
       var item = marketItems[i];
       if (!item || !item.slug || item.slug === setItem.slug || seen[item.slug]) continue;
-      if (item.category !== 'prime_parts') continue;
+      // Everything prime is one category now, so the parts are told apart by
+      // carrying the prime tag without carrying set.
+      if (item.category !== 'prime') continue;
+      var tags = Array.isArray(item.tags) ? item.tags : [];
+      if (tags.indexOf('set') !== -1) continue;
 
       var normalizedName = normalizeMarketName(item.name);
       if (normalizedName === normalizedBase) continue;
@@ -1207,10 +1218,11 @@ function saveMarketFilterState() {
   async function ensureMarketItemsForOverlay() {
     if (marketItems && marketItems.length > 0) return;
     var cached = loadMarketCache();
-    if (cached && cached.length > 0) {
-      marketItems = cached;
+     if (cached && cached.length > 0) {
+      marketItems = refreshMarketItemCategories(cached);
       return;
     }
+
 
     var resp = await fetch(MARKET_API, {
       headers: { 'Accept': 'application/json' }
@@ -1756,7 +1768,7 @@ function saveMarketFilterState() {
 
     if (picks.length >= 8) return picks.slice(0, 8);
 
-    var preferredCategories = ['prime_sets', 'arcanes', 'mods', 'weapons', 'resources'];
+    var preferredCategories = ['prime', 'arcanes', 'mods', 'weapons', 'resources'];
     for (i = 0; i < marketItems.length; i++) {
       var item = marketItems[i];
       if (!item || seen[item.slug]) continue;
@@ -2839,13 +2851,28 @@ function saveMarketFilterState() {
   }
 
   // ---------- Data Loading ----------
-  async function loadMarketItems() {
-    var cached = loadMarketCache();
-    if (cached) {
-      marketItems = cached;
-      onMarketItemsLoaded();
-      return;
+  // The cache stores the API payload with the category already derived, so any
+  // change to getMarketCategory is invisible until the cache expires - the Prime
+  // filter read 0 because cached items still carried the old 'prime_sets' value.
+  // Re-derive on read: it is cheap, and it makes a category change take effect
+  // immediately instead of on a cache expiry nobody would notice.
+  function refreshMarketItemCategories(items) {
+    if (!items) return items;
+    for (var i = 0; i < items.length; i++) {
+      if (!items[i]) continue;
+      items[i].category = getMarketCategory(items[i].tags);
     }
+    return items;
+  }
+
+  async function loadMarketItems() {
+      var cached = loadMarketCache();
+      if (cached) {
+        marketItems = refreshMarketItemCategories(cached);
+        onMarketItemsLoaded();
+        return;
+      }
+
 
     showMarketLoading(true);
     // The fetch and the post-fetch render are separated so a render-side crash
@@ -3379,7 +3406,29 @@ card.appendChild(imgWrap);
 
     var heading = document.createElement('div');
     heading.className = 'orders-parts-heading';
-    heading.textContent = 'Components';
+
+    // Say how much of the set is already owned. The components are listed right
+    // below, and without a count the list reads as a menu rather than as a
+    // build sheet - there is no way to tell at a glance what is still missing.
+    var owned = 0;
+    try {
+      if (typeof inventoryService !== 'undefined' && typeof inventoryService.isOwned === 'function') {
+        for (var o = 0; o < parts.length; o++) {
+          if (inventoryService.isOwned(parts[o].name)) owned++;
+        }
+      }
+    } catch (err) {
+      owned = 0;
+    }
+    owned = Math.min(owned, parts.length);
+
+    var headingText = document.createElement('span');
+    headingText.textContent = 'Components';
+    var headingCount = document.createElement('span');
+    headingCount.className = 'orders-parts-count' + (owned === parts.length ? ' is-complete' : '');
+    headingCount.textContent = owned + ' of ' + parts.length + ' owned';
+    heading.appendChild(headingText);
+    heading.appendChild(headingCount);
     bar.appendChild(heading);
 
     var row = document.createElement('div');
