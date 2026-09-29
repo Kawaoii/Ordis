@@ -164,16 +164,22 @@ body {
   overflow: hidden;
   /* Hairline rim, brighter at the top like a lit glass edge. */
   border: 1px solid rgba(255, 255, 255, 0.16);
-  /* Base fill for the whole app, and the readability floor. 0.86 is the value
-     that matters: a fully white desktop pixel behind the window still only lifts
-     the surface to about rgb(43, 55, 62), against which #fff primary text and
-     #cfe3ea secondary text are comfortably legible. Lower values let a busy
-     desktop bleed through the item grid and the text becomes unreadable.
+  /* Base fill for the whole app, and the readability floor.
+     0.86 was chosen by checking how far a white desktop pixel lifts the surface
+     (about rgb(43,55,62)) and concluding that was opaque enough. That reasoning
+     is wrong: it only bounds the *background* reaching the screen, not the
+     *contrast* it carries. White text on a dark IDE is ~200 levels brighter than
+     that surface, so at 14% it stayed perfectly legible through the window - you
+     could read another application's source through the item grid. Legibility is
+     governed by the brightest thing behind the window, not the average.
 
-     The desktop still reads through the rounded corners and the more
-     translucent surfaces above it, which is where the glass impression comes
-     from. Unlike blur, this is one composited layer for the entire app. */
-  background: rgba(9, 16, 23, 0.86) !important;
+     0.93 lifts a white desktop pixel only to about rgb(24,30,37), and white text
+     behind it moves the surface by ~15 levels, which is below what reads as
+     content. The desktop still shows through the rounded corners and the
+     translucent surfaces above, which is where the glass impression comes from.
+     Blur would be the other answer, but it is unsafe here: this window is
+     transparent and every backdrop-filter forces a readback of the desktop. */
+  background: rgba(9, 16, 23, 0.93) !important;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.22),
     inset 0 0 0 1px rgba(255, 255, 255, 0.04),
@@ -1365,6 +1371,176 @@ body.is-docking .dock-strip { opacity: 0.55; }
 .dock-snap-preview.is-visible {
   opacity: 1;
   transform: scale(1);
+}
+
+/* ---- My Orders listings table ----
+   Every rule for this table was lost when styles.css was trimmed, and only
+   .status-dot survived. With nothing constraining it, each thumbnail rendered at
+   its natural 512x512, which made every row ~500px tall and the table ~3000px in
+   a 900px window - so only the header and one row were ever on screen. Reconstructed
+   from the DOM that renderMyOrders actually produces, not from a guess.
+   Re-check this block if that markup changes. */
+.my-orders-table-container {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin-top: 18px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: rgba(var(--blue-rgb), 0.03);
+}
+
+.my-orders-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-body, inherit);
+}
+
+.my-orders-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 12px 14px;
+  text-align: left;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: rgba(10, 16, 23, 0.94);
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.my-orders-table tbody td {
+  padding: 10px 14px;
+  vertical-align: middle;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.my-orders-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.my-orders-table tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.my-orders-item-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.my-orders-item-cell span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-main, #eaf4f8);
+  font-family: var(--font-display);
+  font-size: 13px;
+}
+
+/* The one rule that mattered most: without an explicit size the browser used the
+   image's intrinsic 512x512 and the row grew to fit it. */
+.my-orders-item-img {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  max-width: 40px;
+  max-height: 40px;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.my-orders-input-plat,
+.my-orders-input-qty {
+  width: 100%;
+  min-width: 90px;
+  padding: 6px 10px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  color: var(--text-main, #eaf4f8);
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+.my-orders-input-plat:focus,
+.my-orders-input-qty:focus {
+  outline: none;
+  border-color: rgba(var(--cyan-rgb, 94, 234, 212), 0.55);
+}
+
+.wfm-badge-type {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+}
+
+.wfm-badge-type.sell {
+  color: #7ee7c7;
+  background: rgba(94, 234, 212, 0.12);
+  border-color: rgba(94, 234, 212, 0.35);
+}
+
+.wfm-badge-type.buy {
+  color: #9fd0f5;
+  background: rgba(125, 211, 252, 0.12);
+  border-color: rgba(125, 211, 252, 0.35);
+}
+
+.my-orders-table td > div:has(.btn-icon-only) {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.btn-icon-only {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--transition-fast, 150ms ease),
+              background var(--transition-fast, 150ms ease),
+              border-color var(--transition-fast, 150ms ease);
+}
+
+.btn-icon-only .material-icons-round {
+  font-size: 18px;
+}
+
+.btn-icon-only:hover {
+  color: var(--text-main, #eaf4f8);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-accent);
+}
+
+.btn-icon-only.delete:hover {
+  color: #ff9b9b;
+  background: rgba(255, 90, 90, 0.12);
+  border-color: rgba(255, 90, 90, 0.4);
 }
 
 /* ---- Pin + minimize ----

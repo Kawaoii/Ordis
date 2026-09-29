@@ -6,6 +6,42 @@ is not lost once the person who wrote it moves on.
 
 ---
 
+## 2026-09-29 (later) — My Orders layout, glass legibility, authoritative set parts
+
+### Bugs found and fixed
+
+| Bug | Cause | Fix |
+|---|---|---|
+| **My Orders rows were ~500px tall and the table ~3000px in a 900px window** | every rule for the listings table was lost when `styles.css` was trimmed, and only `.status-dot` survived. Nothing constrained the thumbnail, so the browser used its intrinsic 512x512 and each row grew to fit | rebuilt the block in `ordis-design.css` from the DOM `renderMyOrders` actually produces |
+| Desktop was legible through the window | `.app-container` was `rgba(9,16,23,0.86)`, justified by checking how far a white pixel lifts the *surface*. That bounds the background, not the contrast it carries: white text on a dark IDE is ~200 levels brighter, so at 14% another application's source was readable through the grid | raised to `0.93` and rewrote the comment, which had the reasoning backwards |
+| Part lists were incomplete | grid grouping infers sets from a hardcoded part-word list, which never contained "Disc", so Glaive Prime's parts bar was missing one | the parts bar now asks `/v2/item/{slug}/set`, falling back to the local list |
+
+### On the My Orders CSS loss
+
+This is the second time the `styles.css` trim has silently removed a whole
+component's layout, the first being item-info drops. Nothing in the toolchain
+detects it: `node --check` only reads JS, and a missing selector is not a syntax
+error. The browser simply falls back to unstyled rendering, which looks like a
+design choice rather than a defect. Worth a check that walks the rendered DOM for
+element classes that have no rule anywhere.
+
+### Verified
+
+My Orders view 3094px -> 608px, thumbnails 512x512 -> 40x40, all 7 listings on
+one screen. Glaive Prime components resolve to Complete set / Blade / Blueprint /
+**Disc**, the last of which the word list did not know about. Grid still 3369
+items with images. Glass at 0.93 over a bright window.
+
+### Not done
+
+- `/v2/items` carries no `setRoot` / `setParts` / `quantityInSet`, so grid
+  grouping still infers sets from names. There is no bulk source; per-card
+  requests would be worse than the inference. Only the opened set is resolved
+  authoritatively.
+- Riven parser, grading wiring, overlay window and the Rivens tab are still open.
+
+---
+
 ## 2026-09-29 — Warframe.market session restoration, attribution, docs
 
 ### Bugs found and fixed

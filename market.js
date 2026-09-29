@@ -3369,6 +3369,12 @@ card.appendChild(imgWrap);
     bar.classList.add('hidden');
     if (!setGroup || !setGroup.parts || !setGroup.parts.length) return;
 
+    drawOrdersPartsBar(bar, setGroup.parts, setGroup, activeItem);
+    refreshOrdersPartsFromApi(bar, setGroup, activeItem);
+  }
+
+  function drawOrdersPartsBar(bar, parts, setGroup, activeItem) {
+    bar.textContent = '';
     bar.classList.remove('hidden');
 
     var heading = document.createElement('div');
@@ -3379,11 +3385,64 @@ card.appendChild(imgWrap);
     var row = document.createElement('div');
     row.className = 'orders-parts-row';
 
-    for (var i = 0; i < setGroup.parts.length; i++) {
-      row.appendChild(createOrdersPartChip(setGroup.parts[i], setGroup, activeItem, i === 0));
+    for (var i = 0; i < parts.length; i++) {
+      row.appendChild(createOrdersPartChip(parts[i], setGroup, activeItem, i === 0));
     }
 
     bar.appendChild(row);
+  }
+
+  /**
+   * Ask Warframe.market which items actually belong to this set, rather than trusting
+   * the local part-word list used to build the grid. /v2/items carries no set fields
+   * at all, so grouping has to be inferred from names there, and that inference is
+   * wrong for parts whose suffix was never anticipated - Glaive Prime ships a "Disc",
+   * which the word list does not contain, so its parts bar was silently incomplete.
+   *
+   * The grid grouping is left as-is: there is no bulk source for set membership, and
+   * one request per card would be worse than the inference it replaces. This only
+   * fires when a set is actually opened, and falls back to the local list.
+   */
+  async function refreshOrdersPartsFromApi(bar, setGroup, activeItem) {
+    var slug = (setGroup && setGroup.setItem && setGroup.setItem.slug) || '';
+    if (!slug) return;
+
+    var members = null;
+    try {
+      var res = await wfmFetch('https://api.warframe.market/v2/item/' + encodeURIComponent(slug) + '/set');
+      var data = res && res.data;
+      if (Array.isArray(data) && data.length > 1) members = data;
+      else if (data && Array.isArray(data.items) && data.items.length > 1) members = data.items;
+    } catch (err) {
+      return;
+    }
+    if (!members) return;
+
+    // Resolve each member against the loaded catalogue so the chips keep the same
+    // shape as the local ones (image, name, slug, category).
+    var parts = [];
+    for (var i = 0; i < members.length; i++) {
+      var it = members[i];
+      var name = it && it.i18n && it.i18n.en ? it.i18n.en.name : '';
+      if (!name) continue;
+      var local = findMarketItemByName(name) || null;
+      parts.push(local || {
+        name: name,
+        slug: it.slug,
+        id: it.id,
+        category: local ? local.category : '',
+        thumb: it.i18n.en.thumb || '',
+        image: it.i18n.en.icon || '',
+        tags: it.tags || []
+      });
+    }
+    if (parts.length < 2) return;
+
+    // The bar may have been closed or pointed at another item while this was in flight.
+    if (!$('#orders-parts-bar') || $('#orders-parts-bar') !== bar) return;
+    if (!currentOrdersSetGroup || currentOrdersSetGroup.setItem !== setGroup.setItem) return;
+
+    drawOrdersPartsBar(bar, parts, setGroup, activeItem);
   }
 
 function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
