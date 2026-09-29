@@ -89,25 +89,110 @@ function isChrome(line) {
  *
  * @returns {{value: number, name: string, isPositive: boolean}|null}
  */
+/**
+ * Resolve a stat name, tolerating a single OCR substitution.
+ *
+ * "Recoil" is read as "Recoll" often enough that dropping the stat loses a
+ * whole line off a riven. A one-edit match against the published attribute list
+ * is safe here: the candidate set is 32 names, and requiring a distance of at
+ * most one on a name of this length will not collide with a different attribute.
+ */
+function fuzzyStatKey(name) {
+  const direct = rivenData.resolveRivenStatKey(name);
+  if (direct) return direct;
+
+  const target = String(name || '').toLowerCase().replace(/[^a-z]/g, '');
+  if (target.length < 5) return null;
+
+  for (const key of Object.keys(rivenData.RIVEN_STATS || {})) {
+    const display = String((rivenData.RIVEN_STATS[key] || {}).display || '').toLowerCase().replace(/[^a-z]/g, '');
+    if (!display) continue;
+    if (display === target || withinOneEdit(display, target) || withinOneEdit(key.toLowerCase(), target)) {
+      return key;
+    }
+  }
+  return null;
+}
+
+/** True when a and b differ by at most one insertion, deletion or substitution. */
+function withinOneEdit(a, b) {
+  if (a === b) return true;
+  const la = a.length;
+  const lb = b.length;
+  if (Math.abs(la - lb) > 1) return false;
+
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < la && j < lb) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++edits > 1) return false;
+    if (la > lb) i++;
+    else if (lb > la) j++;
+    else { i++; j++; }
+  }
+  return edits + (la - i) + (lb - j) <= 1;
+}
+
+/**
+ * Clean debris off the tail of a stat name.
+ *
+ * A riven card draws the stat text over an animated background, and OCR picks
+ * up a stray character at the end of the line often enough to matter:
+ * "Zoom y", "Weapon Recoll", "Status Duration p", "_Slash". A name that does
+ * not resolve to a known stat gets this treatment; one that does resolve is
+ * left alone, so a real name that happens to end in a single letter is safe.
+ */
+function trimStatName(rawName) {
+  let name = String(rawName || '').trim().replace(/\s+/g, ' ');
+
+  // Only trim if the cleaned form still looks like the same name.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const trimmed = name
+      .replace(/[\s._:;,|]+$/, '')   // trailing punctuation and separators
+      .replace(/\s+[a-z]$/, '')      // "Zoom y"
+      .replace(/^[_.\s]+/, '')        // "_Slash"
+      .trim();
+    if (trimmed === name || !trimmed) break;
+    if (rivenData.resolveRivenStatKey(trimmed)) {
+      name = trimmed;
+      break;
+    }
+    name = trimmed;
+  }
+
+  return name.trim();
+}
+
 function parseStatLine(line) {
   if (!line) return null;
   const text = String(line).trim();
 
-  // First number in the line is the rolled value. Anything before it is debris,
-  // which may include letters ("v & X0.7"), so it cannot be stripped by pattern
-  // and must be classified rather than removed.
-  const found = text.match(/(\d+(?:\.\d+)?)/);
+  // The stat value is the first number on the line whose following text starts
+  // with a letter. Not simply the first number: OCR often prefixes debris to a
+  // line, so "0) +112.1% Slash" begins with a "0" that is not the value, and
+  // taking it dropped the whole stat.
+  let found = null;
+  const numberPattern = /\d+(?:\.\d+)?/g;
+  let match;
+  while ((match = numberPattern.exec(text)) !== null) {
+    const after = text.slice(match.index + match[0].length);
+    if (/^[\s%)\].,:;|]*[A-Za-z_]/.test(after)) {
+      found = { index: match.index, text: match[0] };
+      break;
+    }
+  }
   if (!found) return null;
 
-  const number = parseFloat(found[1]);
+  const number = parseFloat(found.text);
   const before = text.slice(0, found.index);
-  const after = text.slice(found.index + found[1].length);
+  const after = text.slice(found.index + found.text.length);
 
   // The stat name follows the value and must start with a letter, which rejects
   // lines where the number is the content ("MR 8", "022").
   const rest = after.replace(/^[\s%]+/, '');
   if (!/^[A-Za-z]/.test(rest)) return null;
-  const name = rest.trim().replace(/\s+/g, ' ');
+  const name = trimStatName(rest);
   if (!name) return null;
   // A wrapped stat name can still end on a card readout, e.g. "1% MR 8 022" would
   // otherwise be read as a 1% bonus called "MR 8 022".
@@ -133,7 +218,7 @@ function parseStatLine(line) {
 
   // A bare fraction with no marker, e.g. "0.72 Damage to Infested". Under 1 is a
   // malus worth the shortfall.
-  if (found[1].indexOf('.') !== -1 && number < 1) {
+  if (found.text.indexOf('.') !== -1 && number < 1) {
     return { value: Math.round((1 - number) * 1000) / 10, name: name, isPositive: false };
   }
 
@@ -221,7 +306,7 @@ function parseRivenOcr(rawText) {
 
   const commit = (candidate) => {
     if (!candidate) return;
-    const key = rivenData.resolveRivenStatKey(candidate.name);
+    const key = fuzzyStatKey(candidate.name);
     const entry = {
       key: key,
       name: candidate.name,
@@ -256,8 +341,20 @@ function parseRivenOcr(rawText) {
       // Speed", so committing early graded a riven as carrying a trait it did
       // not have.
       const next = lines[index + 1];
-      // Only a line that is not itself a complete stat can be a continuation.
-      if (next && !isChrome(next) && !parseStatLine(next)) {
+      /* Only a line that is not itself a complete stat can be a continuation.
+       *
+       * It must also be letters and spaces only. A real riven card puts one
+       * stat per line, so a following line carrying a number or a percent sign
+       * is the next stat, not the tail of this one's name. Without this check
+       * a screen read of
+       *   -82.5% Weapon Recoil
+       *   +88.3% Status Duration
+       *   +112.1% Slash
+       * joined the last two into one stat called
+       * "Status Duration 0) +112.1% Slash", because the leading "0)" of an
+       * OCR-mangled line stops parseStatLine from seeing a stat in it. */
+      const canBeContinuation = next && !isChrome(next) && !/\d|%/.test(next);
+      if (canBeContinuation && !parseStatLine(next)) {
         const joined = stat.name + ' ' + next.trim();
         if (rivenData.resolveRivenStatKey(joined)) {
           commit(Object.assign({}, stat, { name: joined }));
@@ -275,17 +372,34 @@ function parseRivenOcr(rawText) {
     }
 
     if (looksLikeWeaponName(line)) {
-      const split = splitWeaponAndRivenName(line.replace(/^[^A-Za-z]+/, '').trim());
-      // Keep every plausible name, best first. OCR puts fragments above the real
-      // weapon name ("No BE" ahead of "= | Ceramic Dagger"), so a single guess
-      // silently grades against the wrong weapon. The caller picks the first
-      // candidate that riven-data actually knows, which is the only reliable
-      // signal here.
-      if (result.weaponNameCandidates.indexOf(split.weaponName) === -1) {
-        result.weaponNameCandidates.push(split.weaponName);
+      const cleaned = line.replace(/^[^A-Za-z]+/, '').replace(/\s+/g, ' ').trim();
+      const split = splitWeaponAndRivenName(cleaned);
+      /* Keep every plausible name, best first. OCR puts fragments above the real
+       * weapon name ("No BE" ahead of "= | Ceramic Dagger"), so a single guess
+       * silently grades against the wrong weapon. The caller picks the first
+       * candidate that riven-data actually knows, which is the only reliable
+       * signal here.
+       *
+       * A riven card titles itself "<Weapon> <RivenName>", and a riven name is
+       * arbitrary text: "Ocucor Vissilis", "Ocucor Sci-zetides", "Igni-Argus"
+       * all occur. No pattern reliably tells them apart, so every leading word
+       * run is offered as a candidate and the known-weapon lookup in the main
+       * process decides. "Ocucor" is a weapon; "Ocucor Sci-zetides" is not. */
+      const candidates = [];
+      if (split.weaponName) candidates.push(split.weaponName);
+      const words = cleaned.split(' ').filter(Boolean);
+      for (let take = words.length - 1; take >= 1; take--) {
+        candidates.push(words.slice(0, take).join(' '));
+      }
+      if (cleaned) candidates.push(cleaned);
+
+      for (const candidate of candidates) {
+        if (result.weaponNameCandidates.indexOf(candidate) === -1) {
+          result.weaponNameCandidates.push(candidate);
+        }
       }
       if (!result.weaponName) {
-        result.weaponName = split.weaponName;
+        result.weaponName = split.weaponName || cleaned;
         result.rivenName = split.rivenName;
       }
     }
