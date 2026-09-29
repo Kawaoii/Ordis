@@ -17,6 +17,19 @@ const RIVEN_GRADES_SHEET_URL =
   'https://docs.google.com/spreadsheets/d/' + RIVEN_GRADES_SHEET_ID + '/export?format=csv&gid=0';
 const RIVEN_WEAPONS_URL = 'https://api.warframe.market/v2/riven/weapons';
 
+/* Second disposition source.
+ *
+ * Warframe.market's riven list is authoritative for rivenType and covers 420
+ * weapons, but only 7 of those names contain "Prime" - Rubedo Prime, Soma Prime
+ * and Toridak Prime are all absent, so their disposition, and therefore any
+ * perfectness, is unknown. Riven.Market publishes 881 variant dispositions
+ * including 189 Prime ones, which fills most of that gap.
+ *
+ * Neither source is complete for the newest weapons, so a missing disposition
+ * is reported as missing rather than defaulted. Which source supplied a value
+ * is recorded on the weapon so the UI can say where it came from. */
+const RIVEN_DISPOSITIONS_FALLBACK_URL = 'https://rivens.wf/api/v1/weapons';
+
 const RIVEN_DATA_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const RIVEN_FETCH_TIMEOUT_MS = 20000;
 
@@ -628,9 +641,14 @@ async function getRivenData(options) {
     fetchWithTimeout(RIVEN_WEAPONS_URL, { headers: RIVEN_FETCH_HEADERS })
   ]);
 
-  const [csvText, weaponsPayload] = await Promise.all([
+  const [csvText, weaponsPayload, fallbackPayload] = await Promise.all([
     sheetResponse.text(),
-    weaponsResponse.json()
+    weaponsResponse.json(),
+    // A failure here is not fatal. It only widens the set of weapons with a
+    // known disposition, and the first source has already answered.
+    fetchWithTimeout(RIVEN_DISPOSITIONS_FALLBACK_URL, { headers: RIVEN_FETCH_HEADERS })
+      .then((res) => (res && res.ok ? res.json() : null))
+      .catch(() => null)
   ]);
 
   const sheetGrades = parseRivenGradeSheet(csvText);
@@ -649,19 +667,93 @@ async function getRivenData(options) {
       gameRef: entry.gameRef || '',
       group: entry.group || '',
       rivenType: entry.rivenType || '',
+      icon: (entry.i18n.en && (entry.i18n.en.icon || entry.i18n.en.thumb)) || '',
       reqMasteryRank: Number.isFinite(Number(entry.reqMasteryRank)) ? Number(entry.reqMasteryRank) : 0,
-      disposition: Number.isFinite(disposition) ? disposition : 0
+      disposition: Number.isFinite(disposition) && disposition > 0 ? disposition : 0,
+      dispositionSource: Number.isFinite(disposition) && disposition > 0 ? 'warframe.market' : ''
     });
   }
+
+  /* Fold in the fallback dispositions.
+   *
+   * Riven.Market keys dispositions by variant name inside each weapon, so
+   * "Soma" carries both Soma and Soma Prime. Warframe.market's own entry wins
+   * where both have the weapon, because it is the source the market itself
+   * prices against; the fallback only fills weapons Warframe.market does not
+   * list at all, or lists without a disposition. */
+  const fallbackList = fallbackPayload && Array.isArray(fallbackPayload.weapons) ? fallbackPayload.weapons : [];
+  const fallbackOnly = [];
+
+  for (const entry of fallbackList) {
+    const variants = entry && entry.variants && typeof entry.variants === 'object' ? entry.variants : {};
+    for (const variantName of Object.keys(variants)) {
+      const key = normalizeRivenName(variantName);
+      const disposition = Number(variants[variantName]);
+      if (!key || !Number.isFinite(disposition) || disposition <= 0) continue;
+
+      const existing = weapons.get(key);
+      if (existing && existing.disposition > 0) continue;
+
+      if (existing) {
+        existing.disposition = disposition;
+        existing.dispositionSource = 'rivens.wf';
+        continue;
+      }
+
+      // Type is only a hint here. Riven.Market spells its types in title case
+      // ("Rifle", "Pistol") and includes Archgun and Zaw, which the market's
+      // rivenType enum does not.
+      const rivenType = String(entry.type || '').toLowerCase();
+      const known = ['rifle', 'pistol', 'shotgun', 'melee', 'kitgun', 'zaw', 'archgun'];
+      weapons.set(key, {
+        name: variantName,
+        slug: '',
+        gameRef: entry.id || '',
+        group: entry.displayName || '',
+        rivenType: known.indexOf(rivenType) === -1 ? '' : rivenType,
+        icon: '',
+        reqMasteryRank: 0,
+        disposition: disposition,
+        dispositionSource: 'rivens.wf'
+      });
+      fallbackOnly.push(variantName);
+    }
+  }
+
 
   const negativeTolerance = computeNegativeTolerance(sheetGrades);
   const statCoverage = computeStatCoverage(sheetGrades);
 
   const merged = new Map();
   for (const [key, weapon] of weapons) {
-    const grade = sheetGrades.get(key) || null;
+    let grade = sheetGrades.get(key) || null;
+    let communityDataFrom = grade ? 'own' : '';
+
+    /* The 44bananas sheet is keyed on base weapon names: 114 rows, of which two
+     * contain "Prime". So a Prime variant has no entry of its own, and grading
+     * it against nothing produced "unknown, score 0" for every Prime riven -
+     * which is the whole population of current content.
+     *
+     * A Prime variant is the same archetype as its base weapon, and the sheet's
+     * judgement of which stats are good is driven by the archetype, so the base
+     * entry is a far better answer than no answer. It is recorded as
+     * `base-weapon` so the UI can say the grade came from the base weapon
+     * rather than implying it was measured on the Prime. */
+    if (!grade) {
+      const baseKey = key.replace(/ prime$/, '').replace(/^prime /, '');
+      if (baseKey && baseKey !== key) {
+        const baseGrade = sheetGrades.get(baseKey);
+        if (baseGrade) {
+          grade = baseGrade;
+          communityDataFrom = 'base-weapon';
+        }
+      }
+    }
+
     merged.set(key, Object.assign({}, weapon, {
       hasCommunityData: Boolean(grade),
+      communityDataFrom: communityDataFrom,
+      communityDataWeapon: communityDataFrom === 'base-weapon' && grade ? grade.sheetName : '',
       combinations: grade ? grade.combinations : [],
       goodStats: grade ? grade.goodStats : [],
       acceptableNegatives: grade ? grade.acceptableNegatives : [],
@@ -671,17 +763,29 @@ async function getRivenData(options) {
     }));
   }
 
+  // Weapons with no disposition from either source. A riven for one of these
+  // cannot have its perfectness computed, and the UI has to say so rather than
+  // quietly showing 0% or a number borrowed from the base weapon.
+  const missingDisposition = [];
+  for (const [key, weapon] of merged) {
+    if (!(weapon.disposition > 0)) missingDisposition.push(weapon.name || key);
+  }
+
   rivenDataCache = {
     weapons: merged,
     statsWithCommunityData: sheetGrades.size,
     weaponsTotal: merged.size,
+    weaponsFromFallback: fallbackOnly.length,
+    missingDisposition: missingDisposition.sort(),
     negativeTolerance: negativeTolerance.tolerance,
     negativeToleranceTotal: negativeTolerance.total,
     uncoveredStats: statCoverage.uncovered,
     fetchedAt: now,
     sources: {
       grades: RIVEN_GRADES_SHEET_URL,
-      weapons: RIVEN_WEAPONS_URL
+      weapons: RIVEN_WEAPONS_URL,
+      weaponsFallback: RIVEN_DISPOSITIONS_FALLBACK_URL,
+      weaponsFallbackAvailable: fallbackList.length > 0
     }
   };
   rivenDataCacheFetchedAt = now;
