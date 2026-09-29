@@ -34,29 +34,44 @@
 
 ## Overview
 
-Warframe Companion App is an Electron desktop utility focused on quality-of-life workflows for Warframe players:
+Ordis is an Electron desktop utility focused on quality-of-life workflows for Warframe players:
 
 - Track mastered and unmastered items by category
 - Search and filter large item collections quickly
 - View item details, drops, and crafting requirements
-- Access Warframe Market and trading tools from one place
+- Trade on Warframe.market, including managing your own live orders
+- Grade rivens as you reroll them and keep the results in one list
 - Monitor Prime Resurgence and worldstate information
 - Use the MR Calculator and progress stats to plan mastery goals
 
 ## Features
 
-- Category-driven item explorer
+- Category-driven item explorer with full-bleed artwork
 - Mastery progression ring and completion metrics
-- Real-time filters for all, mastered, and unmastered items
+- Real-time filters for owned, unowned, vaulted, and active items
 - Item detail modal with acquisition and crafting context
-- Market view with whisper copy actions
-- Prime Resurgence and Worldstate panels
+- **Warframe.market** integration
+  - Sign in with a browser login or a personal access token
+  - Live sell and buy orders, whisper copy, and market statistics
+  - Your own orders, with hide, show, and delete
+  - **My Orders**, with part counts for set components you already own
+- **Riven grading**
+  - Watches `EE.log` for a reroll and reads the stat panel on screen
+  - Grades against the 44bananas community sheet and the weapon's disposition
+  - Reports perfectness, the percentage of the best possible roll
+  - Every scan is filed into a **Rivens** tab, sorted by grade, perfectness, or disposition
+  - Post a saved riven to Warframe.market, or copy the trade string
+- Prime Resurgence, Relics, Arcanes, Cycles, and Star Chart panels
+- Floating, snapping, tiled panels driven by the dock strip
 - Native Electron window controls and update checks
 
 ## Application Preview
 
-![Warframe Companion App Screenshot](./assets/warframe-companion-app.png)
+![Ordis item explorer](./assets/ordis-item-grid.png)
 
+The Rivens tab, where every graded riven is filed:
+
+![Ordis Rivens tab](./assets/ordis-rivens.png)
 
 ## Tech Stack
 
@@ -105,14 +120,29 @@ npm run package
 ## Project Structure
 
 ```text
-assets/                     App icon and static assets
+assets/                     App icon, screenshots, and bundled fonts
+docs/                       Architecture notes, changelog, dock reference
 index.html                  Main UI markup
-styles.css                  Application styling
+styles.css                  Legacy base styling
+ordis-design.css            Design system: tokens, glass, rounding, panels
 renderer.js                 UI logic and data integration
-market.js                   Market panel behavior
-main.js                     Electron main process
+market.js                   Warframe.market panel behaviour
+riven-data.js               Riven grade sheet, dispositions, grading engine
+riven-parser.js             OCR text -> riven stat parsing
+main.js                     Electron main process, riven scanning, IPC
 preload.js                  Electron preload bridge
+dock.js                     Floating, snapping, tiled panel management
+verify-riven-bases.js       Checks riven base values against the wiki
 ```
+
+## Credits
+
+- [44bananas](https://docs.google.com/spreadsheets/d/1zbaeJBuBn44cbVKzJins_E3hTDpnmvOk8heYN-G8yy8)
+  for the riven grade sheet that the riven grading is built on
+- The [WARFRAME Wiki](https://wiki.warframe.com/w/Riven) for the documented riven
+  attribute value formula and base values
+- **Michroma** by the Michroma Project Authors, under the
+  [SIL Open Font License 1.1](./assets/fonts/OFL.txt)
 
 ## Contributing
 

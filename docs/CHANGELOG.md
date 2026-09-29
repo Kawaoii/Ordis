@@ -6,6 +6,67 @@ is not lost once the person who wrote it moves on.
 
 ---
 
+## 2026-09-29 (latest) — Riven inventory, dead grade card, unstyled market blocks
+
+### Bugs found and fixed
+
+| Bug | Cause | Fix |
+|---|---|---|
+| **The riven grade card could never render** | `handleRivenScanResult` read `payload.riven`, `payload.price` and `payload.listingText`, but `gradeRivenScan()` only ever emits `parsed` and `grade`. The guard always bailed, so the grading feature produced a result nothing displayed | read the fields the main process actually sends; derive the `+`/`-` marker from `isPositive`, because `parseStatLine` emits no polarity glyph |
+| **The Rivens panel could not be opened** | `applyPanelVisibility` names every panel explicitly and had no `rivens` branch, so the panel was never un-hidden | added the branch, and the `rivensPanel` hide to the other twelve |
+| **Copy in the Rivens tab always failed** | used `navigator.clipboard.writeText`, which is rejected as an insecure context on `file://` | reuse the existing `copyTextToClipboard` helper, which falls back to `execCommand` |
+| **A riven could be posted under the wrong market item** | the market item was chosen from the grading engine's `weaponClass`, a separate inference from Warframe.market's `rivenType` | prefer `rivenType` from `/v2/riven/weapons`, and surface a disagreement rather than silently resolving it |
+| **`Your Orders & Actions`, the post-order form, and the orders table had no CSS at all** | `.wfm-user-orders-section`, `.wfm-create-order-grid`, `.wfm-input` and `.wfm-label` were never written, so they fell through to generic legacy styles: a light-grey platform select and bare number spinners inside a dark glass panel | rebuilt the block, the form, and the table header in `ordis-design.css` |
+| **The orders header read `STATUSPLAYER`** | `.order-row` was 14px in a 56px status column, so "Status" was wider than its grid track. A grid cell does not push its neighbour, so the overflow painted over the next column | widened the track, dropped body rows to 12px, made header cells clip |
+| **`&middot;` rendered as literal text in Rivens rows** | the separator was joined into the string and then passed through the HTML escaper, which escaped its own ampersand | join with a literal `·` character instead |
+| **The Rivens panel rendered at content width** | `.rivens-panel` had no `flex: 1`, unlike every other panel, so the right half of the window was dead space | matched the other panels |
+
+### Added
+
+- **Rivens tab.** Every successful riven scan is written to `riven-inventory.json`
+  and filed into a new tab: sort by grade, perfectness, disposition, name or
+  newest; filter by grade and listed state; search weapons, riven names and stat
+  names. Copy a trade string, delete, or post to Warframe.market.
+- The grade is stored next to the raw parse, and **Re-grade all** re-reads the
+  dispositions and the community sheet and re-grades from the stored stats. Both
+  move: dispositions are rebalanced every Prime Access and the 44bananas sheet
+  gets corrected, so a saved riven should not be frozen with a stale verdict.
+- Posting a riven is a separate, explicit action, never a side effect of saving.
+  It requires the riven's own in-game id, because Warframe.market identifies a
+  riven as the generic riven item for the weapon class plus that id as the order
+  `subtype`, and that id is not on the stat panel. The form says so and refuses
+  to post without it.
+- Re-reading the same stat panel does not duplicate the entry. Sitting on the
+  reroll screen would otherwise fill the inventory with copies.
+- Michroma's OFL licence text, which the CSS already claimed shipped with the
+  files.
+
+### Verified
+
+Grading: 32 attributes x 5 weapon classes match the wiki; the base value formula
+and roll weights match the documented weights. Grade card 22/22 against the real
+IPC path, including that OCR text is escaped and cannot inject markup. Rivens tab
+30/30 through the real inventory IPC: store, dedupe, sort, filter, search, list
+form, refusal without an id, copy, and delete persisted to disk. Market item
+selection follows `rivenType` over `weaponClass`.
+
+### Not done
+
+- **No riven price lookup.** The card and engine are correct, but nothing fetches
+  prices, and the price row and Copy Listing button were removed rather than left
+  showing an empty shell. Comparing one stat roll against live orders is an open
+  modelling problem: AlecaFrame's own average and attribute-price figures are
+  derived from its 15-day trade history, which is not public.
+- **No private riven inventory sync.** Warframe.market exposes no endpoint for
+  the rivens on your own account, so "my rivens" is built from scans plus manual
+  entry. Reading the account directly would need a game-side integration.
+- **No riven sniper.** AlecaFrame's sniper watches listings across markets and
+  notifies through a Discord webhook; that is a separate background service.
+- The dock regression suite is still at 10/14: overlap while dragging a floating
+  panel, left-edge tiling, resize, and post-tile overlap are unfixed.
+
+---
+
 ## 2026-09-29 (later) — My Orders layout, glass legibility, authoritative set parts
 
 ### Bugs found and fixed
@@ -71,7 +132,7 @@ approach and already works.
 
 ### Verified
 
-Cold start with no re-login: `/v2/me` **200** as `R3DTAIL_GHOUL`,
+Cold start with no re-login: `/v2/me` **200** against a signed-in account,
 `/v2/orders/my?order_type=sell` **200** (7), `?order_type=buy` **200** (7).
 Market grid 200 cards. My Orders renders 8 rows with all 7 thumbnails loaded.
 

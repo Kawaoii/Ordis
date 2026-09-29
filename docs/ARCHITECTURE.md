@@ -43,6 +43,15 @@ trading, relic/arcane catalogs, item comparison, and various calculators.
 3. **The glass look is carried by tint + a hairline rim, not by blur.** Windows
    has no lensing, and a real blur is not affordable here (rule 2). Don't
    "improve" the glass by adding a filter.
+   - Corrected later by measurement: in a `transparent: true` window the
+     compositor has no surface behind the page to sample, so `backdrop-filter`
+     does not merely cost performance here, it is **inert**. It is still banned
+     by rule 2, but the original reasoning was the wrong one and would mislead
+     the next person into "fixing" it.
+   - A tint that works over the desktop is not the same as a tint that works
+     over app content. `--shell-fill` is calibrated against the desktop; a card
+     that floats *over live app content* has to be much closer to opaque or the
+     content underneath reads through it.
 4. **Tokens are declared on `:root` *and* every `[data-theme]` selector.** The
    legacy theme blocks out-specify `:root` alone.
 5. **`#content` is itself the "checklist" panel.** `getPanelRefs()` maps
@@ -128,3 +137,49 @@ hanging renderer for most of one session and cost real time. `shot.mjs` and
 - **The item thumbnails keep their white plate on purpose.** The source PNGs from
   Warframe have it baked in. Four separate attempts to tone it down were reverted;
   see the note in `ordis-design.css` §9b for what was tried and why.
+- `applyPanelVisibility` enumerates every panel by hand, and a new panel is not
+  shown until it is added there *and* given a `hidden` in the other twelve
+  branches. Missing it is silent: the panel exists, is in the DOM, and never
+  appears.
+- The Rivens panel and the riven card both read OCR output, which is untrusted
+  input. `escapeRivenText` exists for that reason; anything that reaches
+  `innerHTML` from a scan has to go through it.
+- `navigator.clipboard` is rejected on `file://` as an insecure context. Use
+  `copyTextToClipboard`, which falls back to `execCommand`.
+- A full-screen overlay with a `backdrop-filter` blurs *everything* behind it
+  when it is visible, including the whole app. When writing a screenshot script,
+  close overlays by id. Do not sweep on `.modal` and add `hidden` to everything
+  that matches, or you will un-hide a backdrop nobody intended to show.
+
+## Riven grading and the Rivens tab
+
+The pipeline, end to end:
+
+1. `main.js` tails `EE.log` and watches for the reroll screen.
+2. On a match it screenshots the stat panel region and OCRs it.
+3. `riven-parser.js` turns the OCR text into stats, weapon name candidates and
+   riven name.
+4. `riven-data.js` resolves the weapon against `/v2/riven/weapons` for its
+   disposition, and grades against the 44bananas sheet.
+5. The result is sent to the renderer, shown as a card, **and written to
+   `riven-inventory.json`**.
+6. The Rivens tab reads that file when opened.
+
+Design decisions worth keeping:
+
+- **The grade and the raw parse are both stored.** Dispositions change every
+  Prime Access and the grade sheet gets corrected, so a stored riven is
+  re-graded from its stats rather than trusted. `riven-inventory-regrade`
+  exists for that.
+- **Listing is never a side effect of scanning.** Saving a riven touches one
+  local file. Posting an order is a separate, explicit action, because it needs
+  the user's credentials and their intent.
+- **Posting needs the riven's own in-game id.** Warframe.market sells rivens as
+  one generic item per weapon class, with the riven's id as the order
+  `subtype`. That id is not in the screenshot, so it is typed in. The form
+  refuses to post without it rather than posting a wrong order.
+- **The market item comes from `rivenType`, not `weaponClass`.** `rivenType` is
+  Warframe.market's own field from `/v2/riven/weapons`. `weaponClass` is the
+  grading engine's separate inference, used to pick the grade sheet. They can
+  disagree, and posting under the wrong item is not recoverable by the buyer,
+  so a disagreement is surfaced to the player.
