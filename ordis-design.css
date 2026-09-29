@@ -1,0 +1,1767 @@
+/* ==========================================================
+   ORDIS DESIGN SYSTEM v1
+   ==========================================================
+   Single authoritative design layer. Everything visual is defined here in one
+   place, in cascade order, rather than appended as successive override blocks.
+
+   WHAT WENT WRONG BEFORE
+   ---------------------
+   Earlier passes appended a new block each time, and each one fought the last:
+   legacy theme rules out-specified the new ones, so panels rendered with the old
+   flat teal while the body underneath carried a new aurora nobody could see.
+   The result was neither the old design nor the new one.
+
+   The fix is ordering plus specificity. This file is loaded last, so:
+
+     1. A full theme reset neutralises the old palette at the source
+        (--wfui-surface* and friends), so no rule is fighting a stale token.
+     2. Tokens are declared against :root AND every [data-theme] selector, so
+        theme blocks cannot outrank them.
+     3. A single backdrop layer is painted behind the app, and surfaces are made
+        genuinely translucent so it is actually visible through them. Glass with
+        nothing behind it is just grey paint - that was the core failure.
+     4. A minimal, well-supported subset is used: backdrop-filter on a handful of
+        large surfaces only. Cards use tint plus a specular rim, because 120+
+        simultaneous live backdrop filters stalled the renderer.
+
+   MATERIAL REFERENCE
+   ------------------
+   Modelled on iOS 26 "Liquid Glass". Its signature asymmetric corner glow is
+   deliberately NOT reproduced: on dark backgrounds that faked refraction reads
+   as a physical tilt, which was widely reported as disorienting. The rim here is
+   symmetric so nothing looks crooked.
+*/
+
+:root,
+:root[data-theme="wfui"],
+:root[data-theme="warframe"],
+:root[data-theme="orokin"],
+:root[data-theme="stalker"],
+:root[data-theme="lotus"] {
+  color-scheme: dark;
+
+  /* ---- Surfaces ---- */
+  --bg-primary: #0a0a12;
+  --bg-secondary: #12111c;
+  --bg-tertiary: #1a1826;
+  --bg-card: rgba(255, 255, 255, 0.055);
+  --bg-card-hover: rgba(255, 255, 255, 0.09);
+  --bg-sidebar: rgba(255, 255, 255, 0.05);
+
+  /* Legacy theme tokens. These are consumed as colour sources inside rgba() in
+     ~28 rules, so they must stay dark. Setting them to white is what previously
+     turned every panel into a pale fill with invisible text. */
+  --wfui-surface: rgba(255, 255, 255, 0.06);
+  --wfui-surface-rgb: 24, 22, 34;
+  --wfui-surface-alt: rgba(255, 255, 255, 0.085);
+  --wfui-surface-alt-rgb: 20, 18, 30;
+  --wfui-bg: #0a0a12;
+  --wfui-text: #ffffff;
+
+  /* ---- Accent ----
+     Cool steel-blue / teal, matched to the reference. The earlier violet+magenta
+     scheme was the wrong read: the target is a desaturated blue-cyan glass, and
+     the warm magenta blob was what made it feel like a different app. */
+  --wfui-accent: #5eead4;
+  --wfui-accent-rgb: 94, 234, 212;
+  --blue: #7dd3fc;
+  --blue-dim: #38bdf8;
+  --blue-rgb: 125, 211, 252;
+  --cyan: #5eead4;
+  --cyan-dim: #2dd4bf;
+  --purple: #a5b4fc;
+  --green: #4ade80;
+  --red: #fb7185;
+  --gold: #fbbf24;
+  --gold-dim: #d99a06;
+  --gold-bright: #fcd34d;
+  --gold-rgb: 251, 191, 36;
+
+  /* ---- Text ---- */
+  --text-primary: #ffffff;
+  --text-secondary: #cfe3ea;
+  --text-dim: #93a9b4;
+  --text-accent: #a5f3e4;
+
+  --border-color: rgba(255, 255, 255, 0.13);
+  --border-accent: rgba(255, 255, 255, 0.24);
+
+  /* ---- Geometry ---- */
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --radius-xl: 30px;
+
+  /* ---- Material ---- */
+  --glass-tint: rgba(255, 255, 255, 0.07);
+  --glass-tint-strong: rgba(255, 255, 255, 0.11);
+  --glass-tint-card: rgba(255, 255, 255, 0.065);
+  --glass-edge: rgba(255, 255, 255, 0.18);
+  /* Symmetric rim: top edge bright, bottom edge dim. No corner asymmetry. */
+  --glass-rim: inset 0 1px 0 rgba(255, 255, 255, 0.40), inset 0 -1px 0 rgba(255, 255, 255, 0.10);
+  --glass-blur: 14px;
+  --glass-blur-strong: 18px;
+  --glass-saturate: 190%;
+  --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+
+  /* ---- Blur is opt-in, and is OFF by default ----
+     This window is `transparent: true` (main.js), so every `backdrop-filter`
+     forces the compositor to sample what is *behind the window* - the desktop -
+     and composite it back. Doing that on several surfaces at once (titlebar +
+     sidebar + topbar + every modal) while a grid of 121+ cards is in the same
+     stacking context hangs the renderer outright: the window stops painting and
+     the page stops answering the DevTools protocol.
+
+     Verified: with blur on the chrome surfaces the renderer blocked for >15s and
+     never recovered. With the value below it starts normally.
+
+     The glass still reads correctly without it, because the effect is carried by
+     the translucent tint and the specular rim rather than by the blur. If a
+     future Electron/Chromium fixes the cost, set this to
+     `blur(var(--glass-blur-strong)) saturate(var(--glass-saturate))` and re-test
+     before shipping - do not enable it blindly. */
+  --glass-blur-filter: none;
+}
+
+/* ==========================================================
+   1. BACKDROP
+   ==========================================================
+   There is no app-drawn background. The window is transparent, so the OS desktop
+   is the backdrop and the surfaces below are the only thing supplying the
+   material.
+
+   An earlier pass painted a Warframe render plus a violet aurora here instead.
+   That was the wrong model: it made the app opaque, so the "glass" was a dark
+   panel with a blur on top of it rather than clear material, and the whole
+   effect depended on having a detailed image behind it. The reference reads as
+   glass precisely because the desktop is visible through it. */
+
+body {
+  /* No app-drawn background at all. The OS desktop is the backdrop; the glass
+     panels below are what supply the material. This is the whole point of the
+     reference: the wallpaper is visible *through* the frosted panels. */
+  background: transparent !important;
+  color: var(--text-primary);
+}
+
+/* The window shell. Because the BrowserWindow is transparent, this element is
+   what actually reads as "a window": rounded corners, a hairline light edge and
+   a soft drop shadow onto the desktop.
+
+   It also carries the base opacity of the whole app. Without a fill here the
+   desktop showed straight through every surface and the text was unreadable over
+   anything busy - a browser or an editor behind the window made the codex
+   illegible. Tinting the shell is what buys the readability back, and unlike
+   blur it costs nothing, because it is a single composited layer for the entire
+   app rather than one per surface. */
+html,
+body {
+  background: transparent !important;
+}
+
+.app-container {
+  border-radius: 16px;
+  overflow: hidden;
+  /* Hairline rim, brighter at the top like a lit glass edge. */
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  /* Base fill for the whole app, and the readability floor. 0.86 is the value
+     that matters: a fully white desktop pixel behind the window still only lifts
+     the surface to about rgb(43, 55, 62), against which #fff primary text and
+     #cfe3ea secondary text are comfortably legible. Lower values let a busy
+     desktop bleed through the item grid and the text becomes unreadable.
+
+     The desktop still reads through the rounded corners and the more
+     translucent surfaces above it, which is where the glass impression comes
+     from. Unlike blur, this is one composited layer for the entire app. */
+  background: rgba(9, 16, 23, 0.86) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 24px 70px rgba(0, 0, 0, 0.55),
+    0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+/* Chrome sits above the shell's inner content but below the glass surfaces. */
+.app-container,
+.content,
+.settings-page,
+.recommendations-panel,
+.resource-search-panel {
+  position: relative;
+  z-index: 1;
+}
+
+/* Legacy theme painted an opaque fill on these containers, which sat between the
+   backdrop and every surface. Left opaque, no amount of surface tuning makes the
+   glass read as glass.
+
+   `.app-container` is deliberately NOT in this list any more. It carries the
+   app's base opacity (see section 1), and forcing it back to transparent here
+   silently removed that fill - equal specificity, later in the file, both
+   !important - which is exactly what made the text unreadable over a busy
+   desktop. */
+.content,
+.settings-page,
+.recommendations-panel,
+.resource-search-panel {
+  background: transparent !important;
+}
+
+/* Scroll containers must not repaint an opaque backdrop either. */
+.content,
+.recommendations-content,
+.resource-search-content,
+.settings-content,
+.market-content {
+  background: transparent !important;
+}
+
+/* ==========================================================
+   2. GLASS SURFACES
+   ==========================================================
+   Tints are deliberately light. A heavy fill reads as "dark panel with a blur on
+   top"; the reference reads as clear glass, so the desktop must stay visible
+   through the material. Windows has no native lensing, so the approximation is
+   blur + saturate + a low-alpha tint + specular rim.
+
+   Live backdrop-filter is limited to the large, few, mostly-static surfaces.
+   Cards are excluded by design: 120+ concurrent filters stalled the renderer. */
+.titlebar,
+.sidebar,
+.content-topbar,
+.category-header {
+  background: rgba(13, 26, 35, 0.74) !important;
+
+
+  border: 1px solid var(--glass-edge) !important;
+  box-shadow: var(--glass-rim);
+}
+
+.modal,
+.item-info-modal,
+.market-modal,
+.wfm-login-modal,
+.settings-card,
+.compare-section,
+.recommendation-score-card,
+.resource-detail-card,
+.relic-detail-card,
+.contracts-hero {
+  background: rgba(10, 19, 27, 0.93) !important;
+
+
+  border: 1px solid var(--glass-edge) !important;
+  box-shadow: var(--glass-rim), var(--glass-shadow);
+  color: var(--text-primary);
+}
+
+/* Cards: translucent tint + specular rim, no live filter. */
+.item-card,
+.market-item-card,
+.resource-result-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.035)) !important;
+
+
+  border: 1px solid var(--glass-edge) !important;
+  border-radius: 18px !important;
+  box-shadow: var(--glass-rim), 0 8px 22px rgba(0, 0, 0, 0.32);
+  overflow: hidden;
+}
+
+.item-card:hover,
+.market-item-card:hover {
+  border-color: rgba(165, 243, 228, 0.48) !important;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.05)) !important;
+}
+
+.item-card .item-card-image {
+  background:
+    radial-gradient(120% 92% at 50% 6%, rgba(255, 255, 255, 0.08), transparent 64%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.20), transparent 74%);
+}
+
+/* The app's own top bar.
+   It is a SIBLING of .app-container, not a child: it is `position: fixed` across
+   the full window width and lives above the shell in the document. That means
+   the shell's `overflow: hidden` never clipped it, so its top corners stayed
+   square and it read as a separate rectangle laid over a rounded window.
+
+   It is given the shell's radius directly instead, and a matching tint so the
+   two read as one continuous piece of glass. Keep this radius in step with
+   .app-container - if one changes, change both. */
+/* ==========================================================
+/* ==========================================================
+   3. NAVIGATION
+   ========================================================== */
+
+/* The app's own top bar.
+   It is a SIBLING of .app-container, not a child: it is `position: fixed`
+   across the full window width and sits above the shell in the document. That
+   means the shell's `overflow: hidden` never clipped it, so its top corners
+   stayed square and it read as a separate rectangle laid over a rounded window.
+
+   It is given the shell's radius directly instead, and the same base tint, so
+   the two read as one continuous piece of glass. Keep this radius in step with
+   .app-container - if one changes, change both. */
+.titlebar {
+  top: 0;
+  left: 0;
+  right: 0;
+  border-radius: 16px 16px 0 0 !important;
+  border: 1px solid rgba(255, 255, 255, 0.13) !important;
+  border-bottom: 0 !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.26),
+    0 1px 0 rgba(0, 0, 0, 0.25) !important;
+  background: rgba(9, 16, 23, 0.86) !important;
+}
+
+/* The title bar and the shell share a base fill, so there must be no seam or
+   doubled border where they meet. */
+.app-container {
+  border-radius: 0 0 16px 16px !important;
+  border-top: 0 !important;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .titlebar { background: #0b1119 !important; }
+}
+   Denser than the legacy theme. With the dock owning panel switching the sidebar
+   is left with the equipment categories plus the tool actions, and at 900px the
+   default spacing pushed "Reset All" and the update button below the fold. */
+.sidebar .nav-item {
+  min-height: 30px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+.sidebar .nav-section-label {
+  padding: 5px 12px 3px;
+  font-size: 9.5px;
+  letter-spacing: 1.4px;
+}
+
+.sidebar-nav { padding: 8px 8px; }
+.sidebar {
+  border-right: 1px solid var(--glass-edge) !important;
+  border-radius: 0;
+}
+
+.sidebar .nav-item {
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+  border-radius: 14px;
+}
+
+.sidebar .nav-item:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text-primary);
+}
+
+.sidebar .nav-item.active {
+  background: linear-gradient(180deg, rgba(94, 234, 212, 0.26), rgba(56, 189, 248, 0.14)) !important;
+  border-color: rgba(165, 243, 228, 0.34);
+  box-shadow: var(--glass-rim), 0 4px 16px rgba(45, 212, 191, 0.22);
+  color: #ffffff;
+}
+
+.sidebar .nav-count {
+  background: rgba(255, 255, 255, 0.13) !important;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--text-secondary) !important;
+}
+
+.sidebar .nav-item.active .nav-count {
+  background: rgba(94, 234, 212, 0.28) !important;
+  color: #ffffff !important;
+}
+
+.sidebar-footer {
+  background: rgba(0, 0, 0, 0.34) !important;
+  border-top: 1px solid var(--glass-edge);
+}
+
+.sidebar .nav-section-label {
+  color: var(--text-dim) !important;
+}
+
+/* ==========================================================
+   4. CONTROLS
+   ========================================================== */
+.filter-btn,
+.market-cat-btn,
+.market-filter-btn,
+.item-info-tab,
+.resource-filter-btn,
+.wfm-tab-btn,
+.recommendation-filter-btn,
+.contracts-type-btn,
+.market-inventory-filters .market-filter-btn,
+.market-filter-group .market-filter-btn {
+  background: rgba(255, 255, 255, 0.075) !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  color: var(--text-secondary) !important;
+  border-radius: 999px;
+  box-shadow: var(--glass-rim);
+}
+
+.filter-btn:hover,
+.market-cat-btn:hover,
+.market-filter-btn:hover,
+.item-info-tab:hover,
+.resource-filter-btn:hover,
+.wfm-tab-btn:hover,
+.recommendation-filter-btn:hover,
+.contracts-type-btn:hover {
+  background: rgba(255, 255, 255, 0.14) !important;
+  color: var(--text-primary) !important;
+}
+
+.filter-btn.active,
+.market-cat-btn.active,
+.market-filter-btn.active,
+.item-info-tab.active,
+.resource-filter-btn.is-active,
+.wfm-tab-btn.active,
+.recommendation-filter-btn.active,
+.contracts-type-btn.active {
+  background: linear-gradient(180deg, rgba(94, 234, 212, 0.40), rgba(56, 189, 248, 0.20)) !important;
+  border-color: rgba(165, 243, 228, 0.58) !important;
+  color: #ffffff !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.50),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.14),
+    0 4px 16px rgba(45, 212, 191, 0.26);
+}
+
+.btn-primary {
+  background: linear-gradient(180deg, rgba(153, 246, 228, 0.95), rgba(45, 212, 191, 0.95)) !important;
+  border: 1px solid rgba(204, 251, 241, 0.70) !important;
+  color: #04211c !important;
+  border-radius: 999px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.16),
+    0 8px 24px rgba(45, 212, 191, 0.34) !important;
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.10) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  color: var(--text-primary) !important;
+  border-radius: 999px;
+  box-shadow: var(--glass-rim);
+}
+
+.search-input,
+.wfm-input,
+.contracts-control,
+.contracts-select {
+  background: rgba(8, 7, 14, 0.55) !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  color: var(--text-primary) !important;
+  border-radius: 999px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.search-input::placeholder,
+.wfm-input::placeholder {
+  color: var(--text-dim) !important;
+}
+
+.search-input:focus,
+.wfm-input:focus {
+  border-color: rgba(165, 243, 228, 0.58) !important;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45), 0 0 0 3px rgba(94, 234, 212, 0.18) !important;
+}
+
+/* ==========================================================
+   5. GEOMETRY
+   ========================================================== */
+/* The shell owns the window rounding. Inner chrome must stay square, otherwise
+   it double-rounds against the clipped shell edge. */
+.app-container {
+  /* Only the bottom corners are rounded. The title bar above carries the top
+     pair, so the two together read as one continuous window. Rounding all four
+     here is what produced the visible cut under the title bar - a rounded top
+     edge sitting directly beneath a flat one reads as two overlapping pieces
+     rather than one window. Keep these two radii in step. */
+  border-radius: 0 0 16px 16px !important;
+  /* No top border, so there is no doubled line where the title bar meets it. */
+  border-top: 0 !important;
+  overflow: hidden;
+}
+
+.content-topbar,
+.category-header,
+.relics-topbar,
+.resource-search-topbar,
+.recommendations-topbar,
+.trade-analytics-topbar,
+.settings-topbar {
+  border-radius: 0 !important;
+}
+
+.modal,
+.item-info-modal,
+.market-modal,
+.wfm-login-modal,
+.scan-modal {
+  border-radius: 24px !important;
+}
+
+.settings-card,
+.resource-detail-card,
+.relic-detail-card,
+.compare-section,
+.contracts-hero,
+.recommendation-score-card,
+.settings-toggle-row {
+  border-radius: 20px !important;
+}
+
+.item-drop-row,
+.item-variant-row,
+.item-info-ingredient,
+.item-info-row,
+.order-row,
+.resource-used-item,
+.item-drop-group {
+  border-radius: 14px !important;
+}
+
+.item-drop-part-title.is-action {
+  border-radius: 12px;
+}
+
+/* Small elements stay round rather than rounded. */
+.item-drop-rarity,
+.item-drop-group-count,
+.item-drop-go,
+.item-drop-part-go,
+.item-drop-qty,
+.nav-count,
+.owned-badge,
+.item-card-check {
+  border-radius: 999px !important;
+}
+
+.item-drop-icon,
+.item-variant-icon,
+.item-info-row-icon-slot,
+.item-info-ingredient-icon,
+.item-info-part-icon,
+.resource-detail-media,
+.item-drop-icon img,
+.item-info-row-icon,
+.orders-part-thumb {
+  border-radius: 11px !important;
+}
+
+/* ==========================================================
+   6. PERFORMANCE + ACCESSIBILITY
+   ==========================================================
+   Blur is suspended while a window drag is in progress: every blurred layer
+   would otherwise be re-composited on each frame of the resize. */
+body.is-resizing .titlebar,
+body.is-resizing .sidebar,
+body.is-resizing .content-topbar,
+body.is-resizing .category-header,
+body.is-resizing .modal,
+body.is-resizing .item-info-modal,
+body.is-resizing .market-modal,
+body.is-resizing .wfm-login-modal,
+body.is-resizing .settings-card,
+body.is-resizing .compare-section,
+body.is-resizing .recommendation-score-card,
+body.is-resizing .resource-detail-card,
+body.is-resizing .relic-detail-card,
+body.is-resizing .modal-overlay {
+
+
+}
+
+/* ==========================================================
+   7. DOCK - iOS-style snap docking
+   ==========================================================
+   Lives in its own layer above #content because #content is itself the checklist
+   panel, so anything docked into it would be hidden when another panel opens. */
+
+.dock-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+}
+
+.dock-strip,
+.dock-float {
+  pointer-events: auto;
+}
+
+/* ---- Tab strip ----
+   Bottom-docked like the iOS dock rather than across the top: the top of the
+   content area is already occupied by search and the filter pills, and a bar
+   there collided with them. It is offset by the sidebar so it spans the content
+   region only. */
+.dock-strip {
+  position: absolute;
+  top: auto;
+  bottom: 12px;
+  left: calc(var(--sidebar-width) + 16px);
+  right: 16px;
+  transform: none;
+  margin: 0 auto;
+  width: max-content;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  max-width: calc(100% - var(--sidebar-width) - 32px);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  border-radius: 999px;
+  background: rgba(11, 22, 30, 0.92);
+
+
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 8px 26px rgba(0, 0, 0, 0.34);
+  transition: opacity 0.14s ease;
+}
+
+.dock-strip::-webkit-scrollbar { display: none; }
+
+/* Every panel is torn off: the strip has nothing left to dock into, so it gets
+   out of the way entirely rather than sitting there as an empty pill. It returns
+   as soon as a panel is docked back. */
+.dock-strip.is-empty {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(14px) scale(0.94);
+}
+
+/* Keep the last row of content clear of the floating dock. */
+.content,
+.recommendations-content,
+.resource-search-content,
+.settings-content {
+  padding-bottom: 74px !important;
+}
+
+/* Icon-only by default, like the iOS dock: twelve labels do not fit the content
+   width and a half-scrolled strip reads as broken. The label expands on the
+   active and hovered tab, which is also the only label that carries information
+   the icon does not. */
+.dock-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  flex: 0 0 auto;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  /* Only transform and opacity are animated during a drag, so the pointer path
+     stays on the compositor instead of triggering layout on every frame.
+     Durations are deliberately short - the reference reads as instant. */
+  transition: background 0.13s ease, color 0.13s ease, border-color 0.13s ease,
+    padding 0.18s cubic-bezier(0.22, 1.2, 0.36, 1),
+    transform 0.18s cubic-bezier(0.22, 1.2, 0.36, 1), box-shadow 0.18s ease;
+  touch-action: none;
+  -webkit-app-region: no-drag;
+}
+
+.dock-tab-label {
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-width 0.18s cubic-bezier(0.22, 1.2, 0.36, 1), opacity 0.13s ease;
+}
+
+.dock-tab:hover {
+  background: rgba(255, 255, 255, 0.10);
+  color: var(--text-primary);
+}
+
+.dock-tab:hover .dock-tab-label,
+.dock-tab.is-active .dock-tab-label {
+  max-width: 160px;
+  opacity: 1;
+  margin-left: 6px;
+}
+
+.dock-tab.is-active {
+  padding: 0 13px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.10));
+  border-color: rgba(255, 255, 255, 0.32);
+  color: #fff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.60),
+    0 3px 14px rgba(45, 212, 191, 0.28);
+}
+
+.dock-tab-icon {
+  font-size: 17px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+/* Lifted state: the "picked up" cue after the long press. */
+.dock-tab.is-lifted {
+  position: fixed;
+  z-index: 400;
+  cursor: grabbing;
+  background: linear-gradient(180deg, rgba(94, 234, 212, 0.34), rgba(56, 189, 248, 0.18));
+  border-color: rgba(165, 243, 228, 0.6);
+  color: #fff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 16px 38px rgba(0, 0, 0, 0.55),
+    0 0 24px rgba(45, 212, 191, 0.36);
+  pointer-events: none;
+  transition: none;
+}
+
+/* A lifted tab must show its label, otherwise the thing on the cursor is an
+   anonymous icon and the drag has no anchor. */
+.dock-tab.is-lifted {
+  padding: 0 13px;
+  max-width: none;
+}
+
+.dock-tab.is-lifted .dock-tab-label {
+  max-width: 160px;
+  opacity: 1;
+  margin-left: 6px;
+}
+
+/* While dragging, the strip dims so the lifted tab reads as "above" it. */
+body.is-docking .dock-strip { opacity: 0.55; }
+
+.dock-drop-marker {
+  position: absolute;
+  bottom: 4px;
+  top: auto;
+  left: 0;
+  width: 3px;
+  height: calc(100% - 8px);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(165, 243, 228, 0.95), rgba(56, 189, 248, 0.75));
+  box-shadow: 0 0 12px rgba(94, 234, 212, 0.75);
+  opacity: 0;
+  transition: opacity 0.12s ease, transform 0.16s cubic-bezier(0.22, 1.2, 0.36, 1);
+  pointer-events: none;
+}
+
+.dock-drop-marker.is-visible { opacity: 1; }
+
+/* ---- Floating windows ---- */
+/* The strip must always sit above every floating window.
+   A torn-off window used to be given a higher stacking order than the strip, so
+   once one was opened it covered the strip and swallowed the press meant for the
+   next tab - which is why only the first tear-off ever worked and every later
+   one silently did nothing. The strip is pinned above the float z-range. */
+.dock-strip {
+  z-index: 5000;
+}
+
+.dock-float-layer { position: absolute; inset: 0; pointer-events: none; }
+
+.dock-float {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+  min-height: 220px;
+  overflow: hidden;
+  border-radius: 20px;
+  background: rgba(10, 19, 27, 0.95);
+
+
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.30),
+    0 30px 70px rgba(0, 0, 0, 0.58);
+}
+
+.dock-float-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 0 0 auto;
+  height: 38px;
+  padding: 0 8px 0 14px;
+  cursor: grab;
+  user-select: none;
+  background: rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  /* Rounded at the top so the bar follows the window's corner radius instead of
+     reading as a rectangle stuck inside a rounded frame. */
+  border-radius: 19px 19px 0 0;
+  /* NOT -webkit-app-region: drag. These bars are in-page elements, not OS
+     window chrome, and that property makes Chromium hand the pointer to the
+     window manager - which swallowed the drag entirely, so a torn-off window
+     could not be moved at all. The main window's own titlebar keeps it. */
+}
+
+.dock-float-bar:active { cursor: grabbing; }
+
+.dock-float-icon { font-size: 17px; color: var(--text-accent); }
+
+.dock-float-title {
+  flex: 1 1 auto;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.dock-float-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.dock-float-btn .material-icons-round { font-size: 16px; }
+.dock-float-btn:hover { background: rgba(255, 255, 255, 0.14); color: #fff; }
+
+/* The float clips its own content to the rounded frame. Without an explicit
+   isolation boundary the child panels' own background fills (and their
+   scrollbars sit flush) paint straight through the rounded corners, so the
+   top-right, both bottom corners and the body edges look square. */
+.dock-float {
+  isolation: isolate;
+  clip-path: inset(0 round 20px);
+}
+
+.dock-float-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: transparent;
+  /* Round the body's own corners too, so scrolled content is masked on the
+     bottom edges rather than ending in a hard square. */
+  border-radius: 0 0 19px 19px;
+}
+
+/* The torn-off panel must fill its new host instead of inheriting the full-page
+   layout it had while docked.
+
+   Height is `auto`, not `100%`, and that is the important part. Every panel root
+   is `display: flex; flex-direction: column` with an inner content column that
+   is itself `flex: 1`. Forcing a fixed height made those inner sections stretch
+   to fill the window, so the controls drifted apart and the results got pushed
+   to the bottom - the Relics window ended up with its search box floating in
+   the middle of an empty area. Letting the panel size to its content and letting
+   `.dock-float-body` scroll keeps every panel's internal layout intact. */
+.dock-float-body > * {
+  width: 100% !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+/* The panel root is a flex column and its content column is `flex: 1`, so
+   inside a window that content column grew to fill the height and distributed
+   its own children down the page - the Relics window ended up with its search
+   box stranded in the middle and the results pinned to the bottom.
+
+   `min-height: 100%` was not enough of a fix, because re-filling the panel
+   re-triggered the same growth. The content has to size to its own content and
+   let `.dock-float-body` do the scrolling. */
+.dock-float-body .relics-content,
+.dock-float-body .arcanes-content,
+.dock-float-body .cycles-content,
+.dock-float-body .compare-content,
+.dock-float-body .recommendations-content,
+.dock-float-body .resource-search-content,
+.dock-float-body .trade-analytics-content,
+.dock-float-body .settings-content,
+.dock-float-body .prime-content,
+.dock-float-body .market-content {
+  flex: 0 0 auto !important;
+  justify-content: flex-start !important;
+  min-height: 0 !important;
+}
+
+.dock-float-body .content-topbar,
+.dock-float-body .relics-topbar,
+.dock-float-body .resource-search-topbar,
+.dock-float-body .recommendations-topbar,
+.dock-float-body .trade-analytics-topbar,
+.dock-float-body .settings-topbar { border-radius: 0 !important; }
+
+/* A torn-off window is much narrower than the app, and the panels' top bars were
+   laid out for full width. Left alone, the heading, the connect button and the
+   filter chips overlapped each other inside the float. They stack instead, and
+   the chips shrink to fit. */
+.dock-float-body .content-topbar {
+  flex-direction: column;
+  align-items: stretch;
+  /* Pack to the top. Without this the title wrapper's `flex: 1 1 300px` (written
+     for a row layout) grows along the column axis and the top bar inflates to
+     fill the window - the Relics top bar was 646px tall inside a 708px body,
+     which pushed the actual content off the bottom. */
+  align-content: flex-start;
+  flex: 0 0 auto !important;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+/* Nothing inside a floating top bar may grow along the cross axis. */
+.dock-float-body .content-topbar > *,
+.dock-float-body .prime-topbar-title-wrap,
+.dock-float-body .relics-topbar > *,
+.dock-float-body .trade-analytics-topbar > * {
+  flex: 0 0 auto !important;
+  width: auto;
+  min-height: 0;
+}
+
+.dock-float-body .content-topbar > * { min-width: 0; }
+
+.dock-float-body .search-container { width: 100%; }
+
+.dock-float-body .topbar-actions,
+.dock-float-body .market-filters,
+.dock-float-body .filter-row {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.dock-float-body .market-cat-btn,
+.dock-float-body .market-filter-btn,
+.dock-float-body .filter-btn {
+  font-size: 10.5px;
+  padding: 4px 9px;
+}
+
+.dock-float-body .market-title,
+.dock-float-body h1,
+.dock-float-body h2 { font-size: 18px; }
+
+.dock-float-body .btn { font-size: 11px; padding: 6px 12px; }
+
+/* ---- Resize handles ---- */
+.dock-resize { position: absolute; z-index: 5; }
+.dock-resize-n { top: 0; left: 10px; right: 10px; height: 6px; cursor: ns-resize; }
+.dock-resize-s { bottom: 0; left: 10px; right: 10px; height: 6px; cursor: ns-resize; }
+.dock-resize-e { top: 10px; right: 0; bottom: 10px; width: 6px; cursor: ew-resize; }
+.dock-resize-w { top: 10px; left: 0; bottom: 10px; width: 6px; cursor: ew-resize; }
+.dock-resize-ne { top: 0; right: 0; width: 14px; height: 14px; cursor: nesw-resize; }
+.dock-resize-nw { top: 0; left: 0; width: 14px; height: 14px; cursor: nwse-resize; }
+.dock-resize-se { bottom: 0; right: 0; width: 16px; height: 16px; cursor: nwse-resize; }
+.dock-resize-sw { bottom: 0; left: 0; width: 16px; height: 16px; cursor: nesw-resize; }
+
+/* Corner grip, the one affordance that says "this resizes". */
+.dock-resize-se::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid rgba(255, 255, 255, 0.42);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.42);
+  border-radius: 0 0 4px 0;
+}
+
+/* ---- Snap guides ---- */
+.dock-guides {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+  background-image:
+    repeating-linear-gradient(90deg, rgba(165, 243, 228, 0.14) 0 1px, transparent 1px calc(100% / 12)),
+    repeating-linear-gradient(180deg, rgba(165, 243, 228, 0.14) 0 1px, transparent 1px calc(100% / 8));
+}
+
+.dock-guides.is-visible { opacity: 1; }
+
+/* ==========================================================
+   8. ITEM INFO - MISSING LAYOUT
+   ==========================================================
+   The Mission & Drops / Variants / Crafting layout was lost when the appended
+   experiment stack was trimmed out of styles.css. Only the border-radius rules
+   below survived, so these rows rendered as an unstyled stack of spans. The
+   structure here is reconstructed from the DOM that renderer.js builds:
+
+     .item-drop-group
+       .item-drop-group-head > .material-icons-round, .item-drop-group-label,
+                               .item-drop-group-item, .item-drop-group-count
+       .item-drop-row (many)
+         .item-drop-icon > img
+         .item-drop-body > .item-drop-title ( > .item-drop-qty ), .item-drop-sub
+         .item-drop-go, .item-drop-rarity, .item-drop-chance
+     .item-variant-row > .item-variant-icon, .item-variant-text
+     .item-info-ingredient > .item-info-ingredient-icon, -name, -count
+*/
+
+.item-drop-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 0 2px;
+}
+
+.item-drop-group-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 4px 4px;
+  color: var(--text-accent);
+}
+
+.item-drop-group-head .material-icons-round { font-size: 16px; line-height: 1; }
+
+.item-drop-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+}
+
+.item-drop-group-item {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-drop-group-count {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.item-drop-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.035);
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.item-drop-row.is-link { cursor: pointer; }
+
+.item-drop-row.is-link:hover {
+  background: rgba(94, 234, 212, 0.10);
+  border-color: rgba(165, 243, 228, 0.34);
+}
+
+.item-drop-row:focus-visible {
+  outline: 2px solid rgba(165, 243, 228, 0.7);
+  outline-offset: 1px;
+}
+
+.item-drop-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.item-drop-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* icon + text stay stacked, so the row itself only needs a min-width of 0 on
+   the body for the ellipsis in .item-drop-sub to work. */
+.item-drop-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.item-drop-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-drop-qty {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.item-drop-sub {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-drop-sub.is-primary { color: var(--text-secondary); }
+
+.item-drop-go {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-accent);
+  background: rgba(94, 234, 212, 0.14);
+  border: 1px solid rgba(165, 243, 228, 0.26);
+  pointer-events: none;
+}
+
+.item-drop-rarity,
+.item-drop-chance {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.item-drop-rarity.rarity-common { color: #cbd5e1; }
+.item-drop-rarity.rarity-uncommon { color: #4ade80; }
+.item-drop-rarity.rarity-rare { color: #7dd3fc; }
+.item-drop-rarity.rarity-legendary { color: #fbbf24; }
+.item-drop-rarity.rarity-duviri { color: #fb7185; }
+
+.item-drop-group-hints .item-drop-row { opacity: 0.86; }
+
+/* ---- Variants ---- */
+.item-variant-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid transparent;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.item-variant-row:hover {
+  background: rgba(94, 234, 212, 0.10);
+  border-color: rgba(165, 243, 228, 0.34);
+}
+
+.item-variant-row.is-missing {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.item-variant-row.is-missing:hover {
+  background: rgba(255, 255, 255, 0.035);
+  border-color: transparent;
+}
+
+.item-variant-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.item-variant-icon img { width: 100%; height: 100%; object-fit: contain; }
+
+.item-variant-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.item-variant-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-variant-sub { font-size: 11.5px; color: var(--text-dim); }
+
+/* ---- Crafting ingredients ---- */
+.item-info-ingredient {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.item-info-ingredient-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.item-info-ingredient-icon img { width: 100%; height: 100%; object-fit: contain; }
+
+.item-info-ingredient-name {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-info-ingredient-count {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-accent);
+  white-space: nowrap;
+}
+
+.item-info-ingredient-more {
+  padding: 5px 6px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+/* ---- Empty-state placeholder ----
+   Shown only while the active panel is a floating window, so the content area
+   never reads as a dead black region with no explanation. */
+.dock-empty-hint {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  pointer-events: none;
+  /* Below the floating windows: a float is the thing being talked about, so the
+     hint must never sit on top of the panel it is pointing at. */
+  z-index: 1;
+}
+
+.dock-empty-hint.is-visible { display: flex; }
+
+.dock-empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 340px;
+  padding: 22px 26px;
+  border-radius: 20px;
+  text-align: center;
+  pointer-events: auto;
+}
+
+.dock-empty-icon { font-size: 26px; color: var(--text-accent); }
+
+.dock-empty-title {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.dock-empty-title span { color: var(--text-primary); font-weight: 700; }
+
+.dock-empty-btn {
+  margin-top: 4px;
+  padding: 7px 16px;
+  border: 1px solid rgba(165, 243, 228, 0.4);
+  border-radius: 999px;
+  background: rgba(94, 234, 212, 0.16);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.dock-empty-btn:hover { background: rgba(94, 234, 212, 0.3); }
+
+/* ---- Snap preview ----
+   Shows the exact region a window will occupy while it is being dragged toward
+   an edge. Without it the four edge zones are indistinguishable near a corner
+   and the app has to guess. */
+.dock-snap-preview {
+  position: absolute;
+  z-index: 4000;
+  pointer-events: none;
+  border-radius: 20px;
+  opacity: 0;
+  transform: scale(0.98);
+  transition: opacity 0.14s ease, transform 0.18s cubic-bezier(0.22, 1.2, 0.36, 1);
+  background: linear-gradient(180deg, rgba(94, 234, 212, 0.16), rgba(56, 189, 248, 0.10));
+  border: 2px solid rgba(165, 243, 228, 0.75);
+  box-shadow:
+    inset 0 0 40px rgba(94, 234, 212, 0.16),
+    0 0 30px rgba(94, 234, 212, 0.28);
+}
+
+.dock-snap-preview.is-visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* ---- Pin + minimize ----
+   Pinned = LOCKED. The window is frozen where it is: no drag, no resize, no
+   grab handles. The pin icon fills solid white to show that. Unpinning leaves
+   the window in exactly the same spot and restores full drag and resize. */
+.dock-float-btn[data-act="pin"] .material-icons-round {
+  transform: rotate(35deg);
+  opacity: 0.45;
+  transition: opacity 0.15s ease, transform 0.2s cubic-bezier(0.22, 1.2, 0.36, 1);
+}
+
+.dock-float.is-pinned .dock-float-btn[data-act="pin"] .material-icons-round {
+  opacity: 1;
+  color: #ffffff;
+  transform: rotate(35deg) scale(1.06);
+  text-shadow: 0 0 10px rgba(94, 234, 212, 0.9);
+}
+
+.dock-float.is-pinned {
+  border-color: rgba(165, 243, 228, 0.42) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.30),
+    0 30px 70px rgba(0, 0, 0, 0.58),
+    0 0 0 1px rgba(94, 234, 212, 0.18);
+}
+
+/* Locked: hide the resize handles and stop advertising a drag. */
+.dock-float.is-locked .dock-resize { display: none; }
+.dock-float.is-locked .dock-float-bar { cursor: default; }
+.dock-float.is-locked .dock-float-title { cursor: default; }
+
+/* Minimized: collapse to the title bar only, keeping the window's position and
+   a grabbable title so it can be restored. */
+.dock-float.is-minimized {
+  height: 38px !important;
+  min-height: 38px !important;
+}
+
+.dock-float.is-minimized .dock-float-body { display: none; }
+
+.dock-float-btn[data-act="minimize"] .material-icons-round { font-size: 17px; }
+
+/* ==========================================================
+   9e. TOPBAR - SEARCH AND FILTERS ON ONE ROW
+   ==========================================================
+   The search field, the ownership filters and the status pills now share a single
+   row. The filters were inside .topbar-actions, which wraps, so they dropped to
+   a second line and pushed the content down. The search field is given a
+   flexible basis and the filters a fixed one, so the row only wraps when the
+   window genuinely cannot fit them. */
+.content-topbar {
+  flex-wrap: wrap;
+  row-gap: 8px;
+  align-items: center;
+}
+
+.content-topbar .search-container {
+  flex: 1 1 260px;
+  min-width: 200px;
+  max-width: 420px;
+}
+
+/* The ownership filters stay on the search row and shrink rather than wrap. */
+.content-topbar .topbar-inline-filters {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.content-topbar .topbar-inline-filters .filter-btn {
+  white-space: nowrap;
+  padding: 5px 11px;
+  font-size: 11.5px;
+}
+
+.content-topbar .topbar-actions {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  row-gap: 6px;
+  margin-left: auto;
+}
+
+/* Below this width the row is genuinely too tight, so let the filters wrap
+   instead of squeezing the chips into unreadable slivers. */
+@media (max-width: 1000px) {
+  .content-topbar .search-container { max-width: none; }
+  .content-topbar .topbar-inline-filters { flex: 1 1 100%; flex-wrap: wrap; }
+}
+
+/* ==========================================================
+   9d. NO LEFT SIDEBAR
+   ==========================================================
+   The sidebar is gone. Everything it held moved onto the main page:
+
+     - the 11 equipment categories + Mods  -> .category-rail, above the item
+       grid, because they filter this panel rather than being panels themselves
+     - Trade Mode / MR Calculator / Reset  -> .titlebar-tools, because they are
+       actions, not navigation
+     - Mastered / Total / % / Mastery Rank -> .status-strip, beside the rail
+
+   Ids and classes are unchanged throughout, so renderer.js needed no edits.
+   No layout override is needed either: .app-container is already
+   `display: flex` and .content is `flex: 1`, so with the <aside> gone the
+   content simply takes the full width. Overriding that to `display: block`
+   instead would break the height chain. */
+.content {
+  width: 100%;
+}
+
+/* The rail is a horizontal strip of the same chips the dock uses, so it reads as
+   part of one system rather than as a sidebar turned on its side. */
+.category-rail {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.category-rail::-webkit-scrollbar { display: none; }
+
+.category-rail .nav-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  /* Required: the legacy .nav-item is `width: 100%` because it was a full-width
+     sidebar button. flex-basis:auto resolves against that width, so without
+     this the chips stretched to the full rail width and only the first one was
+     ever visible. */
+  width: auto;
+  height: 30px;
+  padding: 0 11px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: none;
+  transition: background 0.13s ease, color 0.13s ease, border-color 0.13s ease,
+    transform 0.18s cubic-bezier(0.22, 1.2, 0.36, 1);
+}
+
+.category-rail .nav-item:hover {
+  background: rgba(255, 255, 255, 0.13);
+  color: var(--text-primary);
+}
+
+.category-rail .nav-item.active {
+  background: linear-gradient(180deg, rgba(94, 234, 212, 0.34), rgba(56, 189, 248, 0.18));
+  border-color: rgba(165, 243, 228, 0.45);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.category-rail .nav-item.is-lifted {
+  position: fixed;
+  z-index: 400;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(94, 234, 212, 0.38), rgba(56, 189, 248, 0.20));
+  border-color: rgba(165, 243, 228, 0.6);
+  color: #fff;
+  box-shadow: 0 16px 38px rgba(0, 0, 0, 0.55);
+  transition: none;
+}
+
+.category-rail .nav-asset-icon,
+.category-rail .material-icons-round { width: 15px; height: 15px; font-size: 15px; }
+
+.category-rail .nav-count {
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+
+/* Completion / mastery readout, sitting inline with the rail. */
+.status-strip {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 6px 12px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.status-strip .status-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11.5px;
+}
+
+.status-strip .stat-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.status-strip .stat-value { font-weight: 700; color: var(--text-primary); }
+
+.status-strip .status-progress { flex: 1 1 180px; min-width: 140px; }
+
+.status-strip .progress-bar-container {
+  flex: 1 1 auto;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.10);
+  overflow: hidden;
+}
+
+.status-strip .progress-bar {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(94, 234, 212, 0.85), rgba(56, 189, 248, 0.85));
+}
+
+.status-strip .progress-text { font-size: 10.5px; color: var(--text-dim); white-space: nowrap; }
+
+.status-strip .status-ring { width: 26px; height: 26px; }
+
+.status-strip .ring-bg,
+.status-strip .ring-progress { fill: none; stroke-width: 8; }
+
+.status-strip .ring-bg { stroke: rgba(255, 255, 255, 0.10); }
+.status-strip .ring-progress { stroke: rgba(94, 234, 212, 0.8); stroke-linecap: round; transform: rotate(-90deg); transform-origin: 50% 50%; }
+
+/* Tool actions in the titlebar. */
+.titlebar-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-tools .nav-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  /* Same legacy width:100% problem as the rail. */
+  width: auto;
+  height: 26px;
+  padding: 0 10px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.13s ease, color 0.13s ease;
+}
+
+.titlebar-tools .nav-item:hover { background: rgba(255, 255, 255, 0.14); color: #fff; }
+.titlebar-tools .material-icons-round { font-size: 15px; }
+.titlebar-tools .nav-update-item { max-width: 190px; overflow: hidden; }
+.titlebar-tools #main-menu-update-details { display: none; }
+
+@media (max-width: 1180px) {
+  .titlebar-tools .nav-text { display: none; }
+  .titlebar-tools .nav-item { padding: 0 8px; }
+  .status-strip { gap: 10px; }
+}
+   The sidebar was a fixed 260px, so below ~1180px it squeezed the item grid
+   into unusable columns. It collapses to an icon rail instead of being dropped,
+   and the dock strip follows it. */
+/* ==========================================================
+   9. NARROW WINDOWS
+   ==========================================================
+   The sidebar no longer exists, so these collapse the rails instead of a column. */
+@media (max-width: 1180px) {
+  :root { --sidebar-width: 0px; }
+
+  .sidebar .nav-text,
+  .sidebar .nav-section-label,
+  .sidebar .stats-label,
+  .sidebar .progress-text,
+  .sidebar .sidebar-stats,
+  .sidebar .nav-count {
+    display: none !important;
+  }
+
+  .sidebar .nav-item {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .sidebar .nav-item .material-icons-round,
+  .sidebar .nav-item .nav-asset-icon { margin: 0; }
+
+  .sidebar .sidebar-header { padding-left: 0; padding-right: 0; }
+}
+
+@media (max-width: 900px) {
+  .content-topbar { flex-wrap: wrap; }
+  .search-container { min-width: 180px; }
+  .dock-tab-label { display: none; }
+  .dock-tab.is-active .dock-tab-label,
+  .dock-tab:hover .dock-tab-label { display: inline; }
+}
+
+/* ==========================================================
+   9c. REDUCED TRANSPARENCY
+   ==========================================================
+   This block had lost its @media wrapper during an earlier edit and was applying
+   unconditionally. Because every rule here is !important and this sits after
+   section 2, it silently switched off blur on the titlebar, sidebar, topbars and
+   every modal - which is precisely why the glass kept reading as flat paint. */
+@media (prefers-reduced-transparency: reduce) {
+  .titlebar,
+  .sidebar,
+  .content-topbar,
+  .category-header,
+  .modal,
+  .item-info-modal,
+  .market-modal,
+  .wfm-login-modal,
+  .settings-card,
+  .resource-detail-card,
+  .relic-detail-card,
+  .modal-overlay {
+
+
+    background: #16151f !important;
+  }
+}
+
+/* ==========================================================
+/* ==========================================================
+   9b. ITEM ART
+   ==========================================================
+   Warframe's exported thumbnails have a white background baked into the PNG, so
+   every card in the codex reads as a bright tile against the dark chrome. That is
+   the source art and cannot be changed without repackaging the images.
+
+   Four approaches were tried and all of them were reverted:
+
+     - `filter: brightness()` on the <img>. Dims the artwork along with the plate
+       and left the plates still glaring, while lifting dithering artefacts in
+       the PNGs' antialiased edges.
+     - `mix-blend-mode: multiply` on the image. Multiply is for a dark subject on
+       a light backdrop; on a dark surface it sends the artwork to near-black.
+     - A dark `::after` with `mix-blend-mode: multiply` over the image. This is
+       the correct direction and did work visually, but it forces a backdrop
+       read-back per element.
+     - `isolation: isolate` on each well, to contain that blend group.
+
+   The last two were removed for a measured reason, not taste. This window is
+   `transparent: true`, so any backdrop read-back means sampling the desktop
+   behind the window. With 121 cards on screen, adding them took the cold-start
+   failure rate from 3-in-4 to 0-in-5: the renderer stopped responding entirely.
+
+   What is left is free. An inset shadow on the well frames the plate as a
+   deliberate lightbox instead of a hole, and the legacy top gradient is removed
+   because it only washed the well out. The art itself is untouched. */
+.item-card-image,
+.market-item-card-image,
+.arcane-card-media,
+.prime-relic-media {
+  position: relative;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.16)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+
+.item-card-image::before { background: none; }
+
+   10. REDUCED MOTION
+   ==========================================================
+   The dock animates on every pointer frame of a drag, so honour the OS setting
+   rather than forcing springs on someone who asked for none. */
+@media (prefers-reduced-motion: reduce) {
+  .dock-tab,
+  .dock-drop-marker,
+  .dock-strip,
+  .dock-tab-label,
+  .item-card .item-card-image img,
+  .market-item-card .market-item-card-image img {
+    transition-duration: 0.01ms !important;
+  }
+}

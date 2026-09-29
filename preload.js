@@ -8,6 +8,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setAlwaysOnTop: (enabled) => ipcRenderer.invoke('set-always-on-top', !!enabled),
   setRelicOverlayEnabled: (enabled) => ipcRenderer.invoke('set-relic-overlay-enabled', !!enabled),
   getRelicOverlayStatus: () => ipcRenderer.invoke('get-relic-overlay-status'),
+  setRivenOverlayEnabled: (enabled) => ipcRenderer.invoke('set-riven-overlay-enabled', !!enabled),
+  getRivenOverlayStatus: () => ipcRenderer.invoke('get-riven-overlay-status'),
+  getAvailableDisplays: () => ipcRenderer.invoke('get-available-displays'),
+  setRivenOverlayDisplay: (displayId) => ipcRenderer.invoke('set-riven-overlay-display', displayId),
   updateRelicOverlay: (payload) => ipcRenderer.invoke('update-relic-overlay', payload || {}),
   openExternal: (url) => ipcRenderer.invoke('open-external-url', String(url || '')),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
@@ -27,8 +31,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fetchWarframeProfile: (manualAccountId, platform) => ipcRenderer.invoke('fetch-warframe-profile', String(manualAccountId || ''), String(platform || '')),
   scanImageForItems: (imageDataUrl) => ipcRenderer.invoke('scan-image-for-items', String(imageDataUrl || '')),
   wfmLoginCredentials: (email, password) => ipcRenderer.invoke('wfm-login-credentials', String(email || ''), String(password || '')),
+  wfmLoginBrowser: () => ipcRenderer.invoke('wfm-login-browser'),
+  wfmLoginCancel: () => ipcRenderer.invoke('wfm-login-cancel'),
   wfmFetch: (url, options) => ipcRenderer.invoke('wfm-fetch', String(url || ''), options || {}),
-  wfmSetCookie: (token) => ipcRenderer.invoke('wfm-set-cookie', String(token || '')),
+    wfmSetCookie: (token) => ipcRenderer.invoke('wfm-set-cookie', String(token || '')),
   onAppUpdateEvent: (callback) => {
     if (typeof callback !== 'function') return () => {};
     var listener = (_event, payload) => callback(payload || {});
@@ -46,5 +52,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     var listener = (_event, payload) => callback(payload || {});
     ipcRenderer.on('relic-overlay-event', listener);
     return () => ipcRenderer.removeListener('relic-overlay-event', listener);
+  },
+  onRivenScanResult: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    var listener = (_event, payload) => callback(payload || {});
+    ipcRenderer.on('riven-scan-result', listener);
+    return () => ipcRenderer.removeListener('riven-scan-result', listener);
+  },
+  onWfmLoginStatus: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    var listener = (_event, payload) => callback(payload || {});
+    ipcRenderer.on('wfm-login-status', listener);
+    return () => ipcRenderer.removeListener('wfm-login-status', listener);
   }
 });

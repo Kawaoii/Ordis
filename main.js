@@ -3,14 +3,73 @@ const path = require('path');
 const fs = require('fs/promises');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
-const { autoUpdater } = require('electron-updater');
-const { createWorker, PSM } = require('tesseract.js');
+
+// tesseract.js and electron-updater are deliberately NOT required at startup.
+// They cost ~830ms of blocking require time between them and neither is needed
+// to show a window, so they load on first actual use instead. See getOcrModule
+// and getAutoUpdater below.
+let tesseractModule = null;
+let autoUpdaterModule = null;
+
+function getOcrModule() {
+  if (!tesseractModule) {
+    tesseractModule = require('tesseract.js');
+  }
+  return tesseractModule;
+}
+
+// riven-data.js pulls in the grade sheet and market parsers and riven-parser.js
+// pulls in riven-data.js, so they are loaded on first riven scan for the same
+// reason tesseract is: nothing on the startup path needs them.
+let rivenParserModule = null;
+let rivenDataModule = null;
+
+function getRivenParserModule() {
+  if (!rivenParserModule) rivenParserModule = require('./riven-parser.js');
+  return rivenParserModule;
+}
+
+function getRivenDataModule() {
+  if (!rivenDataModule) rivenDataModule = require('./riven-data.js');
+  return rivenDataModule;
+}
+
+function getAutoUpdater() {
+  if (!autoUpdaterModule) {
+    autoUpdaterModule = require('electron-updater').autoUpdater;
+  }
+  return autoUpdaterModule;
+}
 
 let mainWindow;
 let relicOverlayWindow;
-const DEFAULT_MIN_WIDTH = 900;
-const DEFAULT_MIN_HEIGHT = 600;
-const isDev = !app.isPackaged;
+let rivenOverlayWindow;
+let wfmLoginWindow;
+
+/**
+ * The verified Warframe.market session token, held in the main process.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * setWfmCookie() writes the JWT into Chromium's cookie jar, but API calls are
+ * made with Node's global fetch (undici), which keeps its own cookie handling and
+ * never reads Chromium's jar. So storing a cookie alone authenticated nothing:
+ * every session-authenticated request went out anonymous and came back 401.
+ *
+ * The token is therefore also kept here and injected as an explicit Cookie header
+ * on outgoing requests. It is only ever set after verifyWfmTokenInMain() has
+ * proven the token actually works, and it is never logged.
+ */
+let wfmSessionToken = '';
+const DEFAULT_MIN_WIDTH = 1024;
+const DEFAULT_MIN_HEIGHT = 640;
+// The topbar carries a search field plus nine filter controls, two status pills
+// and the window buttons. At the old 1280 default that row did not fit, and the
+// controls on the right were clipped out of view with no way to scroll to them.
+// 1440 is the width at which that row lays out on a single line.
+const DEFAULT_WINDOW_WIDTH = 1440;
+const DEFAULT_WINDOW_HEIGHT = 900;
+let isDev = !app.isPackaged;
 let updateDownloaded = false;
 let ocrWorkerPromise = null;
 let activeOcrProgressTarget = null;
@@ -26,9 +85,19 @@ let relicOverlayLogTimer = null;
 let relicOverlayLogPath = '';
 let relicOverlayLogOffset = 0;
 let relicOverlayLogMissingNotified = false;
+let rivenOverlayEnabled = false;
+let rivenOverlayLogTimer = null;
+let rivenOverlayLogPath = '';
+let rivenOverlayLogOffset = 0;
+let rivenOverlayLogMissingNotified = false;
+let rivenOverlayScanning = false;
+let rivenOverlayCachedDisplayId = null;
+let rivenOverlayManualDisplayId = null;
+let rivenOverlayDebugDir = null;
+let rivenOverlayHideTimer = null;
 const PROFILE_FETCH_TIMEOUT_MS = 15000;
-const PROFILE_REMOTE_FETCH_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours between successful Warframe profile calls.
-const PROFILE_REMOTE_RETRY_COOLDOWN_MS = 15 * 60 * 1000; // Failed remote calls must cool down too.
+const PROFILE_REMOTE_FETCH_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const PROFILE_REMOTE_RETRY_COOLDOWN_MS = 15 * 60 * 1000;
 const PROFILE_LOG_CONFIG_FILE = 'warframe-profile-log.json';
 const PROFILE_CACHE_FILE = 'warframe-profile-cache.json';
 const PROFILE_INTRINSIC_RANK_XP = 1500;
@@ -49,6 +118,76 @@ const JUNCTION_MASTERY_XP = 1000;
 let regionMasteryCache = null;
 let regionMasteryCacheFetchedAt = 0;
 const REGION_MASTERY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const RIVEN_OVERLAY_GRADE_THRESHOLDS = { S: 80, A: 60, B: 40, C: 20 };
+const RIVEN_OVERLAY_HIDE_DELAY_MS = 10000;
+const RIVEN_OVERLAY_LOG_POLL_INTERVAL_MS = 750;
+const RIVEN_OVERLAY_LOG_TAIL_BYTES = 64 * 1024;
+const RIVEN_OVERLAY_SCAN_DELAY_MS = 500;
+const RIVEN_OVERLAY_SCAN_BURST_WINDOW_MS = 3000;
+const RIVEN_OVERLAY_DUPLICATE_SCAN_MS = 1500;
+const RIVEN_OVERLAY_MIN_KEYWORD_HITS = 2;
+// Measured, not guessed: the mod card occupies 804,454 337x397 in a 1920x1080 frame
+// (located by template-matching the card crop against the full screenshot). The
+// previous guess of x:0.4 y:0.25 w:0.35 h:0.5 covered y 270-810 while the card runs
+// to y 851, so the last stat line was cropped off and nothing ever OCR'd. These
+// values add ~20px of margin on each side and scale with the frame.
+const RIVEN_OVERLAY_CROP = { x: 0.4083, y: 0.4019, width: 0.1964, height: 0.4046 };
+const RIVEN_OVERLAY_CROP_MIN_WIDTH = 900;
+const RIVEN_OVERLAY_CROP_MAX_WIDTH = 1400;
+
+// Words too common in the Warframe UI to be evidence of a riven stat panel: they
+// appear on unrelated screens and would make the gate pass on anything.
+const RIVEN_OVERLAY_GENERIC_WORDS = new Set([
+  'damage', 'critical', 'chance', 'crit', 'rate', 'speed', 'max', 'capacity',
+  'effect', 'time', 'attack', 'weapon', 'stats', 'total', 'bonus', 'value',
+  'the', 'and', 'for', 'vs', 'with'
+]);
+let rivenOverlayKeywords = null;
+
+/**
+ * Build the OCR keyword list from riven-data's own stat names, aliases and splice
+ * traits instead of maintaining it by hand. The hand-kept list had silently drifted
+ * and was missing Channeling, the three Damage-to-Faction stats and the slide-attack
+ * stat, so a valid riven could be rejected outright. Deriving it means a new
+ * attribute is covered the moment the data knows about it.
+ */
+function getRivenOverlayKeywords() {
+  if (rivenOverlayKeywords) return rivenOverlayKeywords;
+
+  const words = new Set();
+  const add = (phrase) => {
+    if (typeof phrase !== 'string') return;
+    for (const token of phrase.toLowerCase().split(/[^a-z0-9]+/)) {
+      if (token.length >= 4 && !RIVEN_OVERLAY_GENERIC_WORDS.has(token)) words.add(token);
+    }
+  };
+
+  try {
+    const data = getRivenDataModule();
+    for (const entry of Object.values(data.RIVEN_STATS || {})) {
+      add(entry && entry.display);
+      for (const alias of (entry && entry.aliases) || []) add(alias);
+    }
+    for (const name of Object.keys(data.RIVEN_SPLICE_TRAITS || {})) add(name);
+  } catch (err) {
+    // The gate must keep working even if the data module cannot be loaded.
+    for (const word of ['multishot', 'electricity', 'puncture', 'slash', 'impact',
+                        'toxin', 'cold', 'heat', 'reload', 'magazine', 'recoil',
+                        'ammo', 'channeling', 'slide', 'grineer', 'corpus',
+                        'infested', 'finisher', 'launcher', 'melee']) {
+      add(word);
+    }
+  }
+
+  rivenOverlayKeywords = Array.from(words).sort();
+  return rivenOverlayKeywords;
+}
+let rivenOverlayScanTimer = null;
+let rivenOverlayBurstUntil = 0;
+let rivenOverlayScanAttempts = 0;
+let rivenOverlayLastHash = '';
+let rivenOverlayLastHashAt = 0;
+let rivenOverlayLastScanAt = 0;
 
 function sendUpdaterEvent(type, payload) {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -321,8 +460,8 @@ function triggerRelicOverlayBurst(reason) {
   scheduleRelicOverlayScan(80);
 }
 
-async function readRelicOverlayLogChunk(filePath, start, end) {
-  const length = Math.max(0, Math.min(RELIC_OVERLAY_LOG_TAIL_BYTES, end - start));
+async function readLogChunk(filePath, start, end, maxBytes) {
+  const length = Math.max(0, Math.min(maxBytes, end - start));
   if (!filePath || length <= 0) return '';
 
   const handle = await fs.open(filePath, 'r');
@@ -333,6 +472,10 @@ async function readRelicOverlayLogChunk(filePath, start, end) {
   } finally {
     await handle.close();
   }
+}
+
+function readRelicOverlayLogChunk(filePath, start, end) {
+  return readLogChunk(filePath, start, end, RELIC_OVERLAY_LOG_TAIL_BYTES);
 }
 
 async function pollRelicOverlayLog() {
@@ -441,7 +584,7 @@ async function scanRelicOverlayOnce() {
 
     const worker = await getOcrWorker();
     const result = await worker.recognize(ocrRegion.image.toPNG(), {
-      tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+      tessedit_pageseg_mode: getOcrModule().PSM.SINGLE_BLOCK,
       preserve_interword_spaces: '1'
     });
     const data = result && result.data ? result.data : {};
@@ -510,7 +653,7 @@ async function stopRelicOverlayLoop() {
 
 function getOcrWorker() {
   if (!ocrWorkerPromise) {
-    ocrWorkerPromise = createWorker('eng', 1, {
+    ocrWorkerPromise = getOcrModule().createWorker('eng', 1, {
       cachePath: path.join(app.getPath('userData'), 'tesseract-cache'),
       logger: (message) => {
         if (!message || typeof message !== 'object') return;
@@ -639,6 +782,618 @@ function extractOcrLines(data) {
     .map((line) => String(line || '').trim())
     .filter(Boolean)
     .map((line) => ({ text: line, confidence: 0 }));
+}
+
+function sendRivenOverlayEvent(type, payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('riven-overlay-event', Object.assign({ type }, payload || {}));
+}
+
+/**
+ * Report login progress to the renderer.
+ *
+ * Needed because a recoverable login failure no longer ends the
+ * wfm-login-browser promise: the window stays open for a retry, so without
+ * this the renderer would sit on "Opening Warframe Market login..." with no
+ * explanation of why nothing is happening.
+ */
+function sendWfmLoginStatus(payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('wfm-login-status', payload || {});
+}
+
+function sendRivenScanResult(payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('riven-scan-result', payload || {});
+}
+
+function isRivenRerollScreenLogText(text) {
+  return /OmegaRerollSelection\.swf/i.test(String(text || ''));
+}
+
+function isRivenRerollConfirmLogText(text) {
+  return /Are you sure you want to cycle/i.test(String(text || ''));
+}
+
+function isRivenRerollChoiceLogText(text) {
+  return /Cycle Riven into current selection/i.test(String(text || ''));
+}
+
+function normalizeRivenOverlayText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function countRivenKeywordHits(text) {
+  const keywords = getRivenOverlayKeywords();
+  const normalized = normalizeRivenOverlayText(text);
+  if (!normalized) return 0;
+  const padded = ' ' + normalized + ' ';
+  let total = 0;
+  for (const keyword of keywords) {
+    if (padded.indexOf(' ' + keyword + ' ') !== -1) total++;
+  }
+  return total;
+}
+
+/**
+ * Count stat-shaped values: percentages and multipliers. This is deliberately
+ * vocabulary-free, so a frame full of ordinary damage numbers cannot pass the gate
+ * on wording alone, and a riven whose stats happen to be entirely generic words
+ * ("+120% Damage", "-30% Fire Rate") is not rejected for lack of keywords.
+ */
+function countRivenValueHits(text) {
+  // Matched against the raw text on purpose. normalizeRivenOverlayText keeps only
+  // letters and digits, so it deletes the "%", "+", "-" and "." this looks for, and
+  // matching afterwards always returned 0, which silently reduced the gate to
+  // "three keywords" and made the values-only path dead code.
+  const raw = String(text || '').toLowerCase();
+  if (!raw.trim()) return 0;
+  const matches = raw.match(/[+-]?\s*\d+(?:\.\d+)?\s*%|x\s*\d+(?:\.\d+)?/g);
+  return matches ? matches.length : 0;
+}
+
+function isLikelyWarframeRivenContent(text) {
+  // One keyword plus two values, or three values with none, is enough: a riven stat
+  // panel always shows several rolled numbers next to their names.
+  const keywords = countRivenKeywordHits(text);
+  const values = countRivenValueHits(text);
+  return (keywords >= 1 && keywords + values >= 3) || values >= 3;
+}
+
+function createRivenOcrRegion(image) {
+  const size = image && image.getSize ? image.getSize() : { width: 0, height: 0 };
+  const width = Math.max(1, Number(size.width) || 1);
+  const height = Math.max(1, Number(size.height) || 1);
+  const crop = {
+    x: Math.max(0, Math.round(width * RIVEN_OVERLAY_CROP.x)),
+    y: Math.max(0, Math.round(height * RIVEN_OVERLAY_CROP.y)),
+    width: Math.max(1, Math.round(width * RIVEN_OVERLAY_CROP.width)),
+    height: Math.max(1, Math.round(height * RIVEN_OVERLAY_CROP.height))
+  };
+
+  if (crop.x + crop.width > width) crop.width = width - crop.x;
+  if (crop.y + crop.height > height) crop.height = height - crop.y;
+
+  const targetWidth = Math.min(RIVEN_OVERLAY_CROP_MAX_WIDTH, Math.max(RIVEN_OVERLAY_CROP_MIN_WIDTH, crop.width * 1.7));
+  const scale = targetWidth / crop.width;
+  const targetHeight = Math.max(1, Math.round(crop.height * scale));
+  const prepared = image
+    .crop(crop)
+    .resize({
+      width: Math.round(targetWidth),
+      height: targetHeight,
+      quality: 'best'
+    });
+
+  return {
+    image: prepared,
+    offsetX: crop.x,
+    offsetY: crop.y,
+    scale
+  };
+}
+
+function findDisplayById(displayId) {
+  const wanted = String(displayId == null ? '' : displayId);
+  if (!wanted) return null;
+  const displays = screen.getAllDisplays();
+  return displays.find((display) => String(display.id) === wanted)
+    || displays.find((display) => String(display.id).indexOf(wanted) === 0)
+    || null;
+}
+
+async function captureDisplayById(displayId) {
+  const display = findDisplayById(displayId) || (displayId == null ? null : screen.getPrimaryDisplay());
+  const captureSize = getDisplayCaptureSize(display);
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: captureSize
+  });
+
+  const wanted = String(display && display.id ? display.id : '');
+  let source = wanted ? sources.find((entry) => String(entry.display_id || '') === wanted) : null;
+  if (!source && wanted) {
+    source = sources.find((entry) => String(entry.id || '').indexOf(wanted) !== -1) || null;
+  }
+  if (!source) source = sources[0];
+
+  if (!source || !source.thumbnail || source.thumbnail.isEmpty()) {
+    throw new Error('Screen capture is unavailable. Check OS screen recording permission or use borderless/windowed mode.');
+  }
+
+  return {
+    display,
+    image: source.thumbnail,
+    imageSize: source.thumbnail.getSize()
+  };
+}
+
+function getRivenCandidateDisplayIds() {
+  const candidates = [];
+  const push = (value) => {
+    if (value == null || value === '') return;
+    const key = String(value);
+    if (!candidates.includes(key)) candidates.push(key);
+  };
+
+  push(rivenOverlayManualDisplayId);
+  push(rivenOverlayCachedDisplayId);
+  try {
+    const cursorDisplay = getDisplayForRelicOverlay();
+    push(cursorDisplay && cursorDisplay.id);
+  } catch (err) {
+    // Cursor position is unavailable on some platforms; the display sweep below still covers it.
+  }
+  for (const display of screen.getAllDisplays()) push(display.id);
+
+  return candidates;
+}
+
+async function recognizeRivenRegion(capture) {
+  const ocrRegion = createRivenOcrRegion(capture.image);
+  const imageHash = crypto.createHash('sha1').update(ocrRegion.image.toBitmap()).digest('hex');
+  const now = Date.now();
+
+  if (imageHash === rivenOverlayLastHash && (now - rivenOverlayLastHashAt) < RIVEN_OVERLAY_DUPLICATE_SCAN_MS) {
+    return { duplicate: true, imageHash, now };
+  }
+
+  rivenOverlayLastHash = imageHash;
+  rivenOverlayLastHashAt = now;
+
+  const worker = await getOcrWorker();
+  const result = await worker.recognize(ocrRegion.image.toPNG(), {
+    tessedit_pageseg_mode: getOcrModule().PSM.SINGLE_BLOCK,
+    preserve_interword_spaces: '1'
+  });
+  const data = result && result.data ? result.data : {};
+  const lines = transformOcrLines(extractOcrLines(data), ocrRegion);
+  const text = String(data.text || lines.map((line) => line.text).join('\n'));
+
+  return { duplicate: false, imageHash, now, text, lines };
+}
+
+async function scanRivenOverlayOnce() {
+  if (!rivenOverlayEnabled || rivenOverlayScanning) return null;
+  rivenOverlayScanning = true;
+  rivenOverlayLastScanAt = Date.now();
+
+  const diag = { displaysTried: 0, capturesFailed: 0, ocrRuns: 0, duplicates: 0, keywordHits: 0, valueHits: 0, bestText: '' };
+
+  try {
+    const candidateIds = getRivenCandidateDisplayIds();
+    for (const displayId of candidateIds) {
+      diag.displaysTried += 1;
+      let capture = null;
+      let recognition = null;
+      try {
+        capture = await captureDisplayById(displayId);
+      } catch (err) {
+        diag.capturesFailed += 1;
+        diag.lastError = err && err.message ? err.message : 'capture failed';
+        continue;
+      }
+
+      try {
+        recognition = await recognizeRivenRegion(capture);
+      } catch (err) {
+        diag.capturesFailed += 1;
+        diag.lastError = err && err.message ? err.message : 'ocr failed';
+        continue;
+      }
+
+      if (!recognition || recognition.duplicate) {
+        diag.duplicates += 1;
+        continue;
+      }
+
+      diag.ocrRuns += 1;
+      if (String(recognition.text).length > diag.bestText.length) diag.bestText = String(recognition.text);
+      const hits = countRivenKeywordHits(recognition.text);
+      if (hits > diag.keywordHits) diag.keywordHits = hits;
+      // Both halves of the gate are reported, so a failure says which one fell short
+      // instead of implying only the keyword count mattered.
+      const valueHits = countRivenValueHits(recognition.text);
+      if (valueHits > diag.valueHits) diag.valueHits = valueHits;
+
+      if (!isLikelyWarframeRivenContent(recognition.text)) continue;
+
+      rivenOverlayCachedDisplayId = capture.display && capture.display.id != null
+        ? capture.display.id
+        : rivenOverlayCachedDisplayId;
+
+      return {
+        ok: true,
+        text: recognition.text,
+        lines: recognition.lines,
+        imageSize: capture.imageSize,
+        displayBounds: capture.display && capture.display.bounds ? capture.display.bounds : null,
+        displayId: capture.display && capture.display.id != null ? capture.display.id : displayId,
+        capturedAt: recognition.now
+      };
+    }
+
+    return { ok: false, reason: 'no-riven-content', diag };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: 'scan-failed',
+      message: err && err.message ? err.message : 'Riven overlay scan failed.',
+      diag
+    };
+  } finally {
+    rivenOverlayScanning = false;
+  }
+}
+
+function describeRivenScanFailure(diag) {
+  const d = diag || {};
+  if (!d.ocrRuns) {
+    if (d.capturesFailed > 0 && d.duplicates === 0) {
+      return 'Screen capture failed on every display. Check your OS screen recording permission, and use borderless or windowed mode. (' + (d.lastError || 'no detail') + ')';
+    }
+    if (d.duplicates > 0 && d.capturesFailed === 0) {
+      return 'The captured frame never changed, so the reroll screen was probably still animating. Try again.';
+    }
+    return 'No display could be captured. Check your OS screen recording permission.';
+  }
+  // The gate needs 1 keyword plus 2 values, or 3 values on their own, so quoting a
+  // bare "need 2 keywords" here would send the user chasing the wrong number.
+  return 'Read the screen but could not find riven stats (' + d.keywordHits + ' keyword hit' + (d.keywordHits === 1 ? '' : 's') +
+    ', ' + (d.valueHits || 0) + ' value' + (d.valueHits === 1 ? '' : 's') +
+    '; need 1 keyword with 2 values, or 3 values). The crop region may be off for your resolution. Sample text: ' +
+    JSON.stringify(String(d.bestText || '').trim().slice(0, 120));
+}
+
+/**
+ * Turn a successful OCR read into a graded riven.
+ *
+ * Returns a payload shaped for the renderer. Any step that cannot be completed
+ * honestly reports why instead of guessing: an unrecognised weapon has no
+ * disposition, and a disposition is what every maximum roll is scaled by.
+ */
+async function gradeRivenScan(success) {
+  const base = {
+    stage: 'ocr',
+    text: success.text,
+    lines: success.lines,
+    displayId: success.displayId,
+    displayBounds: success.displayBounds,
+    capturedAt: success.capturedAt
+  };
+
+  let parsed;
+  try {
+    parsed = getRivenParserModule().parseRivenOcr(success.text);
+  } catch (err) {
+    return Object.assign({}, base, {
+      success: false,
+      error: 'Reroll was read but the stats could not be parsed. ' + (err && err.message ? err.message : '')
+    });
+  }
+
+  if (!parsed) {
+    return Object.assign({}, base, {
+      success: false,
+      error: 'Reroll was read but no riven stats were found in the text. ' +
+        'The mod card may have been cropped out of the capture region.'
+    });
+  }
+
+  if (!parsed.stats.length) {
+    return Object.assign({}, base, {
+      success: false,
+      parsed: parsed,
+      error: 'Reroll was read but none of the stat names were recognised' +
+        (parsed.unresolvedStats.length
+          ? ': ' + parsed.unresolvedStats.map((s) => s.name).join(', ')
+          : '. The card may have been cut off.') +
+        ' Nothing was graded rather than guessing.'
+    });
+  }
+
+  // A riven has at most three bonuses and one curse. If the parse broke the
+  // layout rules it means lines were lost or noise was read as stats, and grading
+  // it would produce a confident wrong answer.
+  const layoutProblem = parsed.warnings.find((w) => /at most/.test(w));
+  if (layoutProblem) {
+    return Object.assign({}, base, {
+      success: false,
+      parsed: parsed,
+      error: 'Reroll was read but the stats do not form a valid riven (' + layoutProblem + '). ' +
+        'Nothing was graded rather than grading a partial read.'
+    });
+  }
+
+  // An unrecognised stat name means the stat set cannot be confirmed complete, so a
+  // perfectness averaged over the recognised subset would understate the true
+  // value. Refuse rather than report a number we cannot stand behind.
+  //
+  // The one exception is a stat set that is already maximal: three bonuses and one
+  // curse is the most a riven can have, so any further line cannot be a riven stat
+  // and is safe to ignore. That case still grades, but is flagged as partial so the
+  // UI can say an extra line was seen.
+  const RIVEN_MAX_BONUSES = 3;
+  const RIVEN_MAX_CURSES = 1;
+  const bonusCount = parsed.stats.filter((s) => s.isPositive).length;
+  const curseCount = parsed.stats.length - bonusCount;
+  const statsAreMaximal = bonusCount >= RIVEN_MAX_BONUSES && curseCount >= RIVEN_MAX_CURSES;
+
+  if (parsed.unresolvedStats.length && !statsAreMaximal) {
+    return Object.assign({}, base, {
+      success: false,
+      parsed: parsed,
+      unresolvedStats: parsed.unresolvedStats,
+      error: 'Reroll was read but ' + parsed.unresolvedStats.length + ' stat name' +
+        (parsed.unresolvedStats.length === 1 ? ' was' : 's were') + ' not recognised (' +
+        parsed.unresolvedStats.map((s) => s.name).join(', ') + '), so the full stat set is ' +
+        'unknown and a score would be averaged over part of it. Nothing was graded.'
+    });
+  }
+
+  let weapon = null;
+  let weaponError = null;
+  let matchedName = null;
+  try {
+    const rivenData = getRivenDataModule();
+    // getRivenData() is what actually loads the grade sheet and weapon list;
+    // getCachedRivenData() only reads the cache it fills. Calling the getter alone
+    // left the cache null, so every lookup failed and nothing could be graded.
+    // It is TTL-cached, so repeat scans re-fetch at most once per interval.
+    const data = await rivenData.getRivenData();
+    // OCR puts fragments above the real weapon name, so every plausible name is
+    // tried and the first one this tool actually knows wins. Matching published
+    // data is the only reliable signal, and it also rejects the fragment.
+    const names = (parsed.weaponNameCandidates && parsed.weaponNameCandidates.length)
+      ? parsed.weaponNameCandidates
+      : (parsed.weaponName ? [parsed.weaponName] : []);
+    if (!names.length) {
+      weaponError = 'The weapon name was not readable, so the disposition is unknown.';
+    } else {
+      const tried = [];
+      for (const name of names) {
+        const found = rivenData.findRivenWeapon(data, name);
+        if (found && found.weapon) {
+          weapon = found.weapon;
+          matchedName = name;
+          break;
+        }
+        tried.push(name);
+      }
+      if (!weapon) {
+        weaponError = '"' + tried.join('", "') + '" ' + (tried.length > 1 ? 'are not weapons' : 'is not a weapon') +
+          ' this tool knows, so its disposition is unknown and no maximum roll can be computed.';
+      }
+    }
+  } catch (err) {
+    weaponError = 'Could not load weapon data: ' + (err && err.message ? err.message : 'unknown error');
+  }
+
+  let grade = null;
+  if (weapon) {
+    try {
+      grade = getRivenDataModule().gradeRiven(weapon, parsed.stats);
+    } catch (err) {
+      weaponError = 'Grading failed: ' + (err && err.message ? err.message : 'unknown error');
+    }
+  }
+
+  if (!grade) {
+    return Object.assign({}, base, {
+      success: false,
+      parsed: parsed,
+      error: 'Reroll was read (' + parsed.stats.length + ' stats) but could not be graded. ' +
+        (weaponError || 'No reason recorded.')
+    });
+  }
+
+  return Object.assign({}, base, {
+    success: true,
+    parsed: parsed,
+    grade: grade,
+    // Surfaced rather than swallowed: an unresolved stat name usually means the
+    // game added an attribute and riven-data.js has not caught up.
+    unresolvedStats: parsed.unresolvedStats,
+    // Only reachable with a maximal stat set, where the extra line cannot be a
+    // riven stat. Still worth telling the user about.
+    partial: parsed.unresolvedStats.length > 0,
+    partialCaveat: parsed.unresolvedStats.length > 0
+      ? 'Graded from the ' + parsed.stats.length + ' recognised stats. Also saw ' +
+        parsed.unresolvedStats.map((s) => s.name).join(', ') + ', which cannot be part of a riven ' +
+        'that already has its maximum ' + RIVEN_MAX_BONUSES + ' bonuses and ' + RIVEN_MAX_CURSES + ' curse.'
+      : ''
+  });
+}
+
+async function runRivenScanBurst() {
+  rivenOverlayScanAttempts = 0;
+  let lastDiag = null;
+  let success = null;
+
+  while (rivenOverlayEnabled) {
+    // A scan is already running: wait for it instead of burning an attempt on a no-op.
+    if (rivenOverlayScanning) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      continue;
+    }
+    // Always allow one real attempt, even if the burst window elapsed while waiting.
+    if (rivenOverlayScanAttempts > 0 && (rivenOverlayScanAttempts >= 3 || Date.now() >= rivenOverlayBurstUntil)) break;
+
+    rivenOverlayScanAttempts += 1;
+    const result = await scanRivenOverlayOnce();
+    if (!result) continue;
+    if (result.diag) lastDiag = result.diag;
+
+    if (result.ok) {
+      success = result;
+      break;
+    }
+
+    if (rivenOverlayScanAttempts < 3) {
+      await new Promise((resolve) => setTimeout(resolve, RIVEN_OVERLAY_SCAN_DELAY_MS));
+    }
+  }
+
+  if (!rivenOverlayEnabled) return;
+
+  if (success) {
+    sendRivenScanResult(await gradeRivenScan(success));
+    return;
+  }
+
+  sendRivenScanResult({
+    success: false,
+    stage: 'ocr',
+    error: 'Reroll detected, but grading failed. ' + describeRivenScanFailure(lastDiag),
+    diag: lastDiag
+  });
+}
+
+function triggerRivenScan(reason) {
+  if (!rivenOverlayEnabled) return;
+  rivenOverlayBurstUntil = Date.now() + RIVEN_OVERLAY_SCAN_BURST_WINDOW_MS;
+  rivenOverlayLastHash = '';
+  rivenOverlayLastHashAt = 0;
+
+  if (rivenOverlayScanTimer) {
+    clearTimeout(rivenOverlayScanTimer);
+    rivenOverlayScanTimer = null;
+  }
+
+  rivenOverlayScanTimer = setTimeout(() => {
+    rivenOverlayScanTimer = null;
+    runRivenScanBurst().catch(() => {});
+  }, RIVEN_OVERLAY_SCAN_DELAY_MS);
+}
+
+function resetRivenOverlayBurst() {
+  rivenOverlayBurstUntil = 0;
+  rivenOverlayScanAttempts = 0;
+  rivenOverlayLastHash = '';
+  rivenOverlayLastHashAt = 0;
+  if (rivenOverlayScanTimer) {
+    clearTimeout(rivenOverlayScanTimer);
+    rivenOverlayScanTimer = null;
+  }
+}
+
+async function pollRivenOverlayLog() {
+  if (!rivenOverlayEnabled) return;
+
+  try {
+    const logInfo = await findWarframeLog();
+    if (!logInfo || !logInfo.path) {
+      if (!rivenOverlayLogMissingNotified) {
+        rivenOverlayLogMissingNotified = true;
+        sendRivenOverlayEvent('status', {
+          enabled: true,
+          message: 'EE.log not found. Riven grading will not trigger until Warframe has run once.'
+        });
+      }
+      return;
+    }
+
+    const currentPath = path.normalize(logInfo.path);
+    if (currentPath !== rivenOverlayLogPath) {
+      rivenOverlayLogPath = currentPath;
+      rivenOverlayLogOffset = logInfo.size;
+      rivenOverlayLogMissingNotified = false;
+      return;
+    }
+
+    if (logInfo.size < rivenOverlayLogOffset) {
+      rivenOverlayLogOffset = 0;
+    }
+
+    if (logInfo.size <= rivenOverlayLogOffset) return;
+
+    const start = Math.max(rivenOverlayLogOffset, logInfo.size - RIVEN_OVERLAY_LOG_TAIL_BYTES);
+    const chunk = await readLogChunk(currentPath, start, logInfo.size, RIVEN_OVERLAY_LOG_TAIL_BYTES);
+    rivenOverlayLogOffset = logInfo.size;
+
+    if (isRivenRerollConfirmLogText(chunk)) {
+      triggerRivenScan('Riven reroll confirmed. Reading stats...');
+      return;
+    }
+
+    if (isRivenRerollChoiceLogText(chunk) || isRivenRerollScreenLogText(chunk)) {
+      resetRivenOverlayBurst();
+    }
+  } catch (err) {
+    if (!rivenOverlayLogMissingNotified) {
+      rivenOverlayLogMissingNotified = true;
+      sendRivenOverlayEvent('status', {
+        enabled: true,
+        message: 'Could not read EE.log, riven grading is paused.'
+      });
+    }
+  }
+}
+
+async function startRivenOverlayLogWatcher() {
+  if (rivenOverlayLogTimer) {
+    clearInterval(rivenOverlayLogTimer);
+    rivenOverlayLogTimer = null;
+  }
+
+  rivenOverlayLogPath = '';
+  rivenOverlayLogOffset = 0;
+  rivenOverlayLogMissingNotified = false;
+  await pollRivenOverlayLog();
+  rivenOverlayLogTimer = setInterval(() => {
+    pollRivenOverlayLog().catch(() => {});
+  }, RIVEN_OVERLAY_LOG_POLL_INTERVAL_MS);
+}
+
+function stopRivenOverlayLogWatcher() {
+  if (rivenOverlayLogTimer) {
+    clearInterval(rivenOverlayLogTimer);
+    rivenOverlayLogTimer = null;
+  }
+  rivenOverlayLogPath = '';
+  rivenOverlayLogOffset = 0;
+  rivenOverlayLogMissingNotified = false;
+  resetRivenOverlayBurst();
+}
+
+async function startRivenOverlayLoop() {
+  await startRivenOverlayLogWatcher();
+}
+
+async function stopRivenOverlayLoop() {
+  rivenOverlayEnabled = false;
+  stopRivenOverlayLogWatcher();
+  if (rivenOverlayWindow && !rivenOverlayWindow.isDestroyed()) {
+    rivenOverlayWindow.close();
+    rivenOverlayWindow = null;
+  }
+  if (rivenOverlayHideTimer) {
+    clearTimeout(rivenOverlayHideTimer);
+    rivenOverlayHideTimer = null;
+  }
 }
 
 function execFileAsync(command, args, timeoutMs) {
@@ -1481,11 +2236,62 @@ async function fetchWarframeProfileFromLog(manualAccountId, platform) {
   return result;
 }
 
+const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const UPDATE_CHECK_STARTUP_DELAY_MS = 60 * 1000;
+const UPDATE_CHECK_STATE_FILE = 'update-check-state.json';
+let backgroundUpdateCheckTimer = null;
+
+function getUpdateCheckStatePath() {
+  return path.join(app.getPath('userData'), UPDATE_CHECK_STATE_FILE);
+}
+
+/**
+ * Check for updates at most once a day, and not during the first minute.
+ *
+ * The renderer already offers a manual "check for updates" button, so nothing is
+ * lost by throttling the automatic path. Re-checking on every launch means a
+ * network round trip every time someone opens the app, which is how an updater
+ * turns into background chatter nobody asked for.
+ */
+async function scheduleBackgroundUpdateCheckAfter(startupDelayMs) {
+  if (isDev) {
+    return;
+  }
+
+  const state = await readJsonFile(getUpdateCheckStatePath(), {});
+  const lastCheck = Number(state && state.lastCheckAt) || 0;
+  const elapsed = Date.now() - lastCheck;
+  const wait = elapsed >= UPDATE_CHECK_INTERVAL_MS
+    ? startupDelayMs
+    : UPDATE_CHECK_INTERVAL_MS - elapsed + startupDelayMs;
+
+  if (backgroundUpdateCheckTimer) {
+    clearTimeout(backgroundUpdateCheckTimer);
+  }
+  backgroundUpdateCheckTimer = setTimeout(() => {
+    backgroundUpdateCheckTimer = null;
+    getAutoUpdater()
+      .checkForUpdates()
+      .catch(() => {})
+      .finally(async () => {
+        try {
+          await writeJsonFile(getUpdateCheckStatePath(), { lastCheckAt: Date.now() });
+        } catch (err) {
+          // Persisting the update timestamp is best-effort only.
+        }
+      });
+  }, wait);
+  if (typeof backgroundUpdateCheckTimer.unref === 'function') {
+    backgroundUpdateCheckTimer.unref();
+  }
+}
+
 function setupAutoUpdater() {
   if (isDev) {
     return;
   }
 
+  const autoUpdater = getAutoUpdater();
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
 
@@ -1539,12 +2345,17 @@ function setupAutoUpdater() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 860,
+    width: DEFAULT_WINDOW_WIDTH,
+    height: DEFAULT_WINDOW_HEIGHT,
     minWidth: DEFAULT_MIN_WIDTH,
     minHeight: DEFAULT_MIN_HEIGHT,
     frame: false,
-    backgroundColor: '#0a0a0f',
+    // Liquid Glass: the window itself is transparent so the desktop refracts
+    // through the glass panels, exactly as the reference reads. The rounded
+    // shell and hairline edge are painted by .app-container, not by the OS.
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
     icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -1556,17 +2367,53 @@ function createWindow() {
     }
   });
 
-  mainWindow.loadFile('index.html');
+  // Must be absolute: loadFile resolves a relative path against the process working
+  // directory, not the app folder, so launching from anywhere else (a shortcut, a
+  // double-clicked exe, a packaged build) silently produced an empty window with no
+  // error and nothing clickable.
+  const indexPath = path.join(__dirname, 'index.html');
+  mainWindow.loadFile(indexPath).catch((err) => {
+    const message = err && err.message ? err.message : String(err);
+    try {
+      dialog.showErrorBox(
+        'Warframe Companion could not start',
+        'The interface file could not be loaded:\n\n' + indexPath + '\n\n' + message
+      );
+    } catch (dialogErr) {
+      console.error('interface failed to load and no dialog could be shown:', message);
+    }
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
 
-app.whenReady().then(() => {
-  createWindow();
-  setupAutoUpdater();
-});
+// Electron defaults to allowing many instances. Without a lock, double-clicking
+// the shortcut twice leaves two copies fighting over the same windows, ports and
+// OCR workers, which is exactly the "always-running overlay software" feel we are
+// avoiding. The second launch hands off to the first and exits immediately.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.focus();
+  });
+
+  app.whenReady().then(() => {
+    createWindow();
+    // Register the event handlers now so a manual check from the renderer is
+    // reported correctly, but do not require the updater module yet. In dev the
+    // module is never loaded at all.
+    setupAutoUpdater();
+    scheduleBackgroundUpdateCheckAfter(UPDATE_CHECK_STARTUP_DELAY_MS);
+  });
+}
 
 app.on('window-all-closed', () => {
   app.quit();
@@ -1663,6 +2510,70 @@ ipcMain.handle('get-relic-overlay-status', () => {
   };
 });
 
+ipcMain.handle('set-riven-overlay-enabled', async (_event, enabled) => {
+  const next = !!enabled;
+
+  if (!next) {
+    await stopRivenOverlayLoop();
+    sendRivenOverlayEvent('status', {
+      enabled: false,
+      message: 'Riven grading overlay disabled.'
+    });
+    return { ok: true, enabled: false };
+  }
+
+  try {
+    rivenOverlayEnabled = true;
+    await startRivenOverlayLoop();
+    sendRivenOverlayEvent('status', {
+      enabled: true,
+      message: 'Watching EE.log for riven rerolls...'
+    });
+    return { ok: true, enabled: true };
+  } catch (err) {
+    await stopRivenOverlayLoop();
+    return {
+      ok: false,
+      enabled: false,
+      message: err && err.message ? err.message : 'Could not start riven grading overlay.'
+    };
+  }
+});
+
+ipcMain.handle('get-riven-overlay-status', () => {
+  return {
+    ok: true,
+    enabled: rivenOverlayEnabled,
+    scanning: rivenOverlayScanning,
+    logPath: rivenOverlayLogPath,
+    cachedDisplayId: rivenOverlayCachedDisplayId,
+    manualDisplayId: rivenOverlayManualDisplayId,
+    lastScanAt: rivenOverlayLastScanAt,
+    burstActive: Date.now() < rivenOverlayBurstUntil
+  };
+});
+
+ipcMain.handle('get-available-displays', () => {
+  return screen.getAllDisplays().map((display) => {
+    return {
+      id: display.id,
+      label: display.label || 'Display',
+      bounds: display.bounds,
+      scaleFactor: display.scaleFactor,
+      primary: display.id === screen.getPrimaryDisplay().id
+    };
+  });
+});
+
+ipcMain.handle('set-riven-overlay-display', (_event, displayId) => {
+  const value = displayId == null || displayId === '' ? null : displayId;
+  if (value !== null && !findDisplayById(value)) {
+    return { ok: false, message: 'That display is no longer connected.' };
+  }
+  rivenOverlayManualDisplayId = value;
+  return { ok: true, manualDisplayId: rivenOverlayManualDisplayId };
+});
+
 ipcMain.handle('update-relic-overlay', async (_event, payload) => {
   if (!relicOverlayEnabled) return { ok: false, visible: false, reason: 'disabled' };
   try {
@@ -1708,14 +2619,21 @@ ipcMain.handle('check-for-app-update', async () => {
   if (isDev) {
     return { ok: false, reason: 'dev-mode' };
   }
+  // A background app that re-checks on every single launch is the behaviour that
+  // makes an updater feel like bloatware. Only a user-initiated check goes
+  // through here; the routine daily check is throttled in checkForUpdatesInBackground.
   try {
-    await autoUpdater.checkForUpdates();
+    await getAutoUpdater().checkForUpdates();
     return { ok: true };
   } catch (err) {
     return {
       ok: false,
       message: err && err.message ? err.message : 'Update check failed.'
     };
+  } finally {
+    // An explicit check resets the daily timer, so the automatic pass does not
+    // immediately repeat the request the user just made.
+    scheduleBackgroundUpdateCheckAfter(UPDATE_CHECK_INTERVAL_MS);
   }
 });
 
@@ -1724,7 +2642,7 @@ ipcMain.handle('download-app-update', async () => {
     return { ok: false, reason: 'dev-mode' };
   }
   try {
-    await autoUpdater.downloadUpdate();
+    await getAutoUpdater().downloadUpdate();
     return { ok: true };
   } catch (err) {
     return {
@@ -1739,7 +2657,7 @@ ipcMain.handle('install-downloaded-update', () => {
     return { ok: false };
   }
   sendUpdaterEvent('installing-update');
-  autoUpdater.quitAndInstall(false, true);
+  getAutoUpdater().quitAndInstall(false, true);
   return { ok: true };
 });
 
@@ -1842,7 +2760,26 @@ ipcMain.handle('scan-image-for-items', async (event, imageDataUrl) => {
 
 ipcMain.handle('wfm-login-credentials', async (_event, email, password) => {
   try {
-    const getResp = await fetch('https://warframe.market/');
+    const getResp = await fetch('https://warframe.market/', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html'
+      }
+    });
+    // Warframe Market sits behind Cloudflare. When the challenge is active every
+    // route answers 403 with an interstitial instead of the real page, so the JWT
+    // cookie and CSRF token this flow needs are never issued. Say that plainly
+    // rather than letting it surface as a failed sign-in.
+    if (getResp.status === 403 || getResp.status === 503) {
+      return {
+        ok: false,
+        message: 'Warframe Market is behind a Cloudflare check right now (HTTP ' + getResp.status +
+          '), so the sign-in page could not be read. This is a network or IP-reputation block, not a wrong ' +
+          'password. Try again later or from a different network, or use "Log in with Warframe Market" in the ' +
+          'browser instead.'
+      };
+    }
+
     const cookies = getResp.headers.get('set-cookie');
     
     var jwtCookie = '';
@@ -1883,7 +2820,10 @@ ipcMain.handle('wfm-login-credentials', async (_event, email, password) => {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         'Cookie': jwtCookie,
-        'x-csrf-token': csrfToken
+        'x-csrf-token': csrfToken,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Origin': 'https://warframe.market',
+        'Referer': 'https://warframe.market/'
       },
       body: JSON.stringify({
         auth_type: 'header',
@@ -1941,11 +2881,19 @@ ipcMain.handle('wfm-fetch', async (_event, url, options) => {
     options = options || {};
     options.headers = options.headers || {};
 
-    const authHeader = options.headers['Authorization'] || options.headers['authorization'];
+    const authHeader = options.headers['Authorization'] || options.headers['authorization'] || '';
+    let cookieToken = '';
     if (authHeader) {
-      const tokenOnly = authHeader.startsWith('JWT ') ? authHeader.substring(4).trim() : authHeader.trim();
-      options.headers['Cookie'] = 'JWT=' + tokenOnly;
+      cookieToken = authHeader.startsWith('JWT ') ? authHeader.substring(4).trim() : authHeader.trim();
+      delete options.headers['Authorization'];
+      delete options.headers['authorization'];
     }
+
+    // Fall back to the verified session when the caller did not pass one
+    // explicitly. Without this the stored session was never sent, because the
+    // cookie jar and undici do not share state.
+    if (!cookieToken) cookieToken = wfmSessionToken;
+    if (cookieToken) options.headers['Cookie'] = 'JWT=' + cookieToken;
 
     options.headers['Accept'] = 'application/json';
     options.headers['Platform'] = 'pc';
@@ -1994,14 +2942,252 @@ async function setWfmCookie(tokenOnly) {
   }
 }
 
-ipcMain.handle('wfm-set-cookie', async (_event, token) => {
+/**
+ * Ask warframe.market who a token belongs to.
+ *
+ * The browser login harvests a JWT cookie, but a cookie existing does not mean
+ * the token is usable: /v2/me is the only thing that proves it. Doing that check
+ * here rather than in the renderer means the login window can be kept open when
+ * verification fails, instead of being destroyed and leaving the user with an
+ * auth error and no way to retry.
+ */
+async function verifyWfmTokenInMain(token) {
+  const raw = String(token || '').trim();
+  const tokenOnly = raw.startsWith('JWT ') ? raw.slice(4).trim() : raw;
+  if (!tokenOnly) return { ok: false, message: 'Warframe Market did not return a session token.' };
+
   try {
-    const tokenOnly = token.startsWith('JWT ') ? token.substring(4).trim() : token.trim();
-    await setWfmCookie(tokenOnly);
-    return { ok: true };
+    const resp = await fetch('https://api.warframe.market/v2/me', {
+      headers: {
+        'Accept': 'application/json',
+        'Platform': 'pc',
+        'Language': 'en',
+        // warframe.market authenticates API calls with the JWT cookie. The
+        // Authorization header alone is not accepted by every endpoint.
+        'Cookie': 'JWT=' + tokenOnly
+      }
+    });
+
+    if (resp.status === 401 || resp.status === 403) {
+      return {
+        ok: false,
+        message: 'Warframe Market rejected that session (HTTP ' + resp.status + '). It may have expired, or the sign-in did not complete. The login window is still open - try signing in again.'
+      };
+    }
+    if (!resp.ok) {
+      return {
+        ok: false,
+        message: 'Could not verify the Warframe Market session (HTTP ' + resp.status + '). This is usually a network or Cloudflare block rather than a bad password. The login window is still open.'
+      };
+    }
+
+    const json = await resp.json().catch(() => null);
+    const data = json && json.data ? json.data : null;
+    if (!data) {
+      return { ok: false, message: 'Warframe Market returned an unexpected response while verifying the session.' };
+    }
+    return { ok: true, token: 'JWT ' + tokenOnly, user: data };
   } catch (err) {
-    return { ok: false, message: err.message };
+    return {
+      ok: false,
+      message: 'Could not reach Warframe Market to verify the session: ' + (err && err.message ? err.message : 'network error')
+    };
   }
+}
+
+ipcMain.handle('wfm-set-cookie', async (_event, token) => {
+  // A token is only a session if Warframe.market accepts it. Previously this
+  // handler wrote the cookie and returned ok:true unconditionally, so an expired
+  // or mistyped token looked like a successful login and the failure only
+  // surfaced later as a 401 on some unrelated market call.
+  const verified = await verifyWfmTokenInMain(token);
+  if (!verified.ok) {
+    wfmSessionToken = '';
+    return { ok: false, message: verified.message };
+  }
+
+  const tokenOnly = String(token).startsWith('JWT ') ? String(token).substring(4).trim() : String(token).trim();
+  wfmSessionToken = tokenOnly;
+  await setWfmCookie(tokenOnly);
+  return { ok: true, user: verified.user };
+});
+
+ipcMain.handle('wfm-login-cancel', async () => {
+  if (wfmLoginWindow && !wfmLoginWindow.isDestroyed()) {
+    wfmLoginWindow.destroy();
+  }
+  wfmLoginWindow = null;
+  return { ok: true };
+});
+
+ipcMain.handle('wfm-login-browser', async (_event) => {
+  if (wfmLoginWindow && !wfmLoginWindow.isDestroyed()) {
+    wfmLoginWindow.focus();
+    return { ok: false, message: 'The Warframe Market login window is already open.' };
+  }
+
+  const { session } = require('electron');
+  const loginSession = session.fromPartition('wfm-login', { cache: false });
+  const LOGIN_TIMEOUT_MS = 180000;
+  const CLOUDFLARE_TITLE = /just a moment|attention required|checking your browser/i;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let pollTimer = null;
+    let timeoutTimer = null;
+    let sawCloudflare = false;
+    // Guards the verify step so a slow /v2/me response is not started again on
+    // the next tick, and so one rejected token is not retried forever.
+    let verifying = false;
+    let rejectedToken = '';
+
+    const clearTimers = () => {
+      if (pollTimer) clearInterval(pollTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      pollTimer = null;
+      timeoutTimer = null;
+    };
+
+    // Only a verified session closes the window. `keepWindow` is used for
+    // recoverable failures so the user can sign in again without restarting.
+    //
+    // The polling interval deliberately survives a recoverable failure: clearing
+    // it here would stop the watcher, and the re-armed timeout would then fire
+    // with nothing left to detect the retry.
+    const finish = (result, keepWindow) => {
+      if (settled) return;
+      if (keepWindow) {
+        // Leave the window open and keep polling. The renderer is told the
+        // current status so the message appears immediately, and the promise
+        // stays pending until the window is closed or a later attempt succeeds.
+        if (result && result.message) {
+          sendWfmLoginStatus({ ok: false, message: result.message, recoverable: true });
+          console.warn('WFM browser login not completed:', result.message);
+        }
+        return;
+      }
+
+      settled = true;
+      clearTimers();
+      if (wfmLoginWindow && !wfmLoginWindow.isDestroyed()) {
+        wfmLoginWindow.destroy();
+      }
+      wfmLoginWindow = null;
+      resolve(result);
+    };
+
+    const timeoutMessage = () => (
+      sawCloudflare
+        ? 'Warframe Market never got past its Cloudflare check, so no session was created. ' +
+          'This is a network or IP-reputation block rather than a login problem. Try again later or from a ' +
+          'different network, or use the email and password form.'
+        : 'Timed out waiting for a Warframe Market session. Finish logging in within three minutes, then try again.'
+    );
+
+    const armTimeout = () => {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      timeoutTimer = setTimeout(() => finish({ ok: false, message: timeoutMessage() }), LOGIN_TIMEOUT_MS);
+    };
+
+    armTimeout();
+
+    wfmLoginWindow = new BrowserWindow({
+      width: 1180,
+      height: 860,
+      title: 'Log in to Warframe Market',
+      autoHideMenuBar: true,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false,
+        partition: 'wfm-login'
+      }
+    });
+
+pollTimer = setInterval(async () => {
+       try {
+         // A Cloudflare interstitial can sit in front of the login page indefinitely.
+         // Remember that it was seen so the eventual timeout explains the real cause.
+         if (!sawCloudflare && wfmLoginWindow && !wfmLoginWindow.isDestroyed()) {
+           try {
+             if (CLOUDFLARE_TITLE.test(wfmLoginWindow.getTitle())) {
+               sawCloudflare = true;
+               // Reset the timeout because Cloudflare can take a while
+               armTimeout();
+             }
+           } catch (err) {
+             // The title is unavailable while the page is still committing; try again next tick.
+           }
+         }
+
+         if (verifying) return;
+
+         const cookies = await loginSession.cookies.get({ domain: '.warframe.market' });
+         const jwt = cookies.find((cookie) => cookie && cookie.name === 'JWT' && cookie.value);
+         if (!jwt || !jwt.value) return;
+
+         // Ignore a token already known to be bad, otherwise a cookie the site
+         // refuses to accept would be re-verified every second forever.
+         if (jwt.value === rejectedToken) return;
+
+         verifying = true;
+         let result;
+         try {
+           result = await verifyWfmTokenInMain(jwt.value);
+         } finally {
+           verifying = false;
+         }
+
+         if (result && result.ok) {
+           // Keep the verified token so later wfm-fetch calls are authenticated
+           // without the renderer having to resend the Authorization header.
+           wfmSessionToken = String(result.token || '').replace(/^JWT\s+/i, '').trim();
+           finish({ ok: true, token: result.token, user: result.user });
+           return;
+         }
+
+         rejectedToken = jwt.value;
+         wfmSessionToken = '';
+         finish({ ok: false, message: result && result.message ? result.message : 'Warframe Market rejected that session.' }, true);
+         // The user may sign in again in the still-open window, which issues a
+         // fresh cookie. Re-arm the clock so a retry is not cut short.
+         armTimeout();
+       } catch (err) {
+         // Keep polling; a transient cookie read failure should not abort the login.
+       }
+     }, 1000);
+
+    wfmLoginWindow.on('closed', () => {
+      clearTimers();
+      wfmLoginWindow = null;
+      if (settled) return;
+      settled = true;
+      resolve({ ok: false, message: 'Login window closed before a session was established.' });
+    });
+
+wfmLoginWindow.webContents.on('did-fail-load', (_e, code, description, _url, isMainFrame) => {
+       // -3 is ERR_ABORTED, which Chromium reports for a navigation that was
+       // cancelled or superseded. Every redirect and every Cloudflare interstitial
+       // produces one, so treating it as a hard failure aborted the login before the
+       // login page had even finished loading. Sub-frames fail for their own reasons
+       // and say nothing about the page the user is looking at.
+       if (code === -3) return;
+       if (isMainFrame === false) return;
+       // Ignore certain failures that may be related to Cloudflare interstitial resources
+       if (description && (/cloudflare/i.test(description))) {
+         return;
+       }
+       finish({ ok: false, message: 'Could not load Warframe Market: ' + (description || code) });
+     });
+
+wfmLoginWindow.loadURL('https://warframe.market/login').catch((err) => {
+       if (err && err.message && /cloudflare/i.test(err.message)) {
+         finish({ ok: false, message: 'Cloudflare is blocking access to Warframe Market. Please try again later or use the email and password form.' });
+       } else {
+         finish({ ok: false, message: err && err.message ? err.message : 'Could not open Warframe Market.' });
+       }
+     });
+  });
 });
 
 app.on('before-quit', () => {
@@ -2013,6 +3199,10 @@ app.on('before-quit', () => {
   if (relicOverlayWindow && !relicOverlayWindow.isDestroyed()) {
     relicOverlayWindow.close();
     relicOverlayWindow = null;
+  }
+  if (wfmLoginWindow && !wfmLoginWindow.isDestroyed()) {
+    wfmLoginWindow.destroy();
+    wfmLoginWindow = null;
   }
   if (!ocrWorkerPromise) return;
   ocrWorkerPromise

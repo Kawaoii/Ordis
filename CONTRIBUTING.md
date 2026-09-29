@@ -1,9 +1,12 @@
 # Contributing
 
-Thanks for your interest in improving Warframe Companion App.
+Thanks for your interest in improving Ordis.
 
 ## Before you start
 
+- **Read [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) first.** It records the
+  constraints that have already broken the app when ignored, along with why they
+  exist. Skipping it is the fastest way to reintroduce a bug that was already fixed.
 - Open an issue first for large changes so the direction is clear.
 - Keep pull requests focused. One feature or fix per PR is ideal.
 - Test the app locally before opening a PR.
@@ -24,7 +27,11 @@ node --check main.js
 node --check preload.js
 node --check renderer.js
 node --check market.js
+node --check dock.js
 ```
+
+`node --check` only catches syntax errors. It will not catch a malformed CSS
+selector, which renders as an unstyled element rather than an error.
 
 If your change affects packaging, also run:
 

@@ -21,3 +21,22 @@ Desktop.ini
 # Local environment files
 .env
 .env.*
+
+# Local working transcripts. Useful as a private record of how the project
+# evolved, but they are conversation logs rather than project files, they are
+# large, and one of them contained a live Warframe.market token before it was
+# redacted. Kept on disk, never pushed.
+session-ses_*.md
+docs/RECOVERED-SESSION-*.md
+
+# Scratch folders from extracting and inspecting upstream data.
+temp_extract/
+
+# Fabricated placeholder data. Its contents were invented rather than sourced, so
+# it must never reach the repository: something would eventually trust it. The dev
+# dashboard in riven-overlay-dashboard.html is the only thing that reads it, and
+# that file is deliberately not part of a packaged build.
+rivenAttributes.json
+
+# Unused leftover. assets/icon.png is the icon the app and installer use.
+assets/icon.jpg

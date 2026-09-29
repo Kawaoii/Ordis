@@ -20,14 +20,56 @@
   const MARKET_TRADABLE_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours
   const ITEMS_BACKGROUND_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
   const ITEMS_BACKGROUND_REFRESH_MIN_GAP_MS = 5 * 60 * 1000; // 5 minutes
+  // A one-second countdown that nobody is watching is a wakeup every second for
+  // nothing. While the window is hidden or minimized the countdowns drop to a
+  // once-a-minute tick, which still lands on the right second within a minute
+  // and resynchronises immediately on the way back to visible.
+  const PRIME_HIDDEN_TICK_MS = 60 * 1000;
+  const CYCLE_HIDDEN_TICK_MS = 60 * 1000;
   const PROFILE_PROCESS_WATCH_INTERVAL_MS = 3000;
   const PROFILE_PROCESS_WATCH_TIMEOUT_MS = 90000;
   const ALWAYS_ON_TOP_KEY = 'warframe_always_on_top_enabled';
-  const AUTO_UPDATE_CHECK_KEY = 'warframe_auto_update_check_enabled';
+const AUTO_UPDATE_CHECK_KEY = 'warframe_auto_update_check_enabled';
+const AUTO_UPDATE_LAST_CHECK_KEY = 'warframe_auto_update_last_check_at';
+const AUTO_UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const AUTO_UPDATE_STARTUP_DELAY_MS = 15 * 1000;
+const UPDATE_CHECK_STATE_FILE = 'update-check-state.json';
   const APP_THEME_KEY = 'warframe_app_theme_v1';
-  const REPO_URL = 'https://github.com/Hasan580/Warframe-companion-app.git';
-  const TELEGRAM_CONTACT_URL = 'https://t.me/Hassanf0';
-  const UPDATE_REPO_API = 'https://api.github.com/repos/Hasan580/Warframe-companion-app';
+  /* ==========================================================
+     FORK CONFIGURATION
+     ==========================================================
+     Everything that points at the upstream project lives here, so a fork can
+     retarget itself by editing one block instead of hunting through the file.
+
+     WHY THIS MATTERS FOR A FORK
+     ---------------------------
+     UPDATE_* pointed at the original author's repository, which meant a fork
+     would check *upstream's* releases and offer an update built from code the
+     fork does not contain. That is at best confusing and at worst a way to push
+     someone else's binary at your users. Set UPDATE_ENABLED to false to remove
+     the check entirely, or point OWNER/REPO at your own remote.
+
+     Note the upstream is Hasan580/Warframe-companion-app, even though package.json
+     named a different owner. Both are upstream, and both are wrong for a fork.
+     ========================================================== */
+  const FORK = Object.freeze({
+    OWNER: 'Kawaoii',
+    REPO: 'Ordis',
+    // Set false to disable the update check entirely in your fork.
+    UPDATE_ENABLED: true
+  });
+
+  const REPO_URL = 'https://github.com/' + FORK.OWNER + '/' + FORK.REPO + '.git';
+  const REPO_WEB_URL = 'https://github.com/' + FORK.OWNER + '/' + FORK.REPO;
+  // Bug reports go to this fork's tracker, never upstream's. The inherited build pointed
+  // at the original author's personal Telegram, so a user's "contact me" message would
+  // have gone to a third party who never agreed to receive it.
+  const ISSUES_URL = REPO_WEB_URL + '/issues';
+  // The licence requires visible attribution to the original project, and names an
+  // about screen as a valid place for it.
+  const UPSTREAM_URL = 'https://github.com/Hasan580/Warframe-companion-app';
+  const UPSTREAM_AUTHOR = 'Hassan F.';
+  const UPDATE_REPO_API = 'https://api.github.com/repos/' + FORK.OWNER + '/' + FORK.REPO;
   const UPDATE_RELEASE_API = UPDATE_REPO_API + '/releases/latest';
   const UPDATE_TAGS_API = UPDATE_REPO_API + '/tags?per_page=1';
   const UPDATE_PACKAGE_API = UPDATE_REPO_API + '/contents/package.json';
@@ -178,7 +220,10 @@
       type: 'Amp',
       masterable: true,
       tradable: false,
-      imageName: '',
+      // This is a synthetic entry with no art of its own, so it used to render the
+      // generic "image" placeholder icon and read as a broken picture. The category
+      // artwork ships with the app and is the closest real image.
+      imageName: 'assets/amp.png',
       description: 'Generic Operator Amp profile entry shown in Warframe Equipment. Added so the Amps category matches the in-game total of 10.',
       wikiaUrl: 'https://wiki.warframe.com/w/Amp',
       wikiAvailable: true,
@@ -391,6 +436,10 @@
   let itemsRefreshInProgress = false;
   let lastItemsRefreshAt = 0;
   let itemsAutoRefreshInitialized = false;
+// Active visibility-aware intervals. A Set rather than a single handle: the Prime
+// resurgence and Cycle countdowns are independent, and each must keep ticking
+// while the other is running.
+const visibilityTickHandles = new Set();
   let profileFetchInProgress = false;
   let profileProcessWatchTimer = null;
   let profileProcessWatchStartedAt = 0;
@@ -476,11 +525,15 @@
     alwaysOnTopToggle: $('#setting-always-on-top'),
     relicOverlayToggle: $('#setting-relic-overlay'),
     relicOverlayStatus: $('#relic-overlay-status'),
+    rivenOverlayToggle: $('#setting-riven-overlay'),
+    rivenOverlayStatus: $('#riven-overlay-status'),
+    rivenDisplaySelect: $('#riven-display-select'),
     settingsThemeCurrent: $('#settings-theme-current'),
     themeOptions: $$('.settings-theme-option'),
     autoUpdateCheckToggle: $('#setting-auto-update-check'),
     openGithubRepoBtn: $('#btn-open-github-repo'),
-    openTelegramContactBtn: $('#btn-open-telegram-contact'),
+    openIssuesBtn: $('#btn-open-issues'),
+    openUpstreamBtn: $('#btn-open-upstream'),
     updateStatusPill: $('#update-status-pill'),
     updateStatusText: $('#update-status-text'),
     appContainer: $('.app-container'),
@@ -623,6 +676,7 @@
     settingsCheckUpdateBtn: $('#btn-settings-check-update'),
     settingsUpdateDetails: $('#settings-update-details'),
     settingsAppVersion: $('#settings-app-version'),
+    settingsAboutVersion: $('#settings-about-version'),
     itemInfoModal: $('#item-info-modal'),
     itemInfoClose: $('#item-info-close'),
     itemInfoName: $('#item-info-name'),
@@ -644,6 +698,9 @@
     itemInfoWikiState: $('#item-info-wiki-state'),
     itemInfoWikiContent: $('#item-info-wiki-content'),
     itemInfoFarmList: $('#item-info-farm-list'),
+  itemInfoVariants: $('#item-info-variants'),
+  itemInfoVariantsSection: $('#item-info-variants-section'),
+  itemInfoTradeAction: $('#item-info-trade-action'),
     itemInfoCraftList: $('#item-info-craft-list'),
     scanModal: $('#scan-modal'),
     scanModalClose: $('#scan-modal-close'),
@@ -4126,6 +4183,13 @@
     );
   }
 
+  /**
+   * Sub-ingredients for a craftable part, as structured entries.
+   *
+   * These used to be pre-joined into strings like "Alloy Plate x50000", which
+   * meant the expanded part list could only ever be plain text. Returning the
+   * name and count separately lets each ingredient carry its own icon.
+   */
   function getPartResourceList(recipe) {
     var out = [];
     if (!recipe || !Array.isArray(recipe.components)) return out;
@@ -4135,7 +4199,7 @@
       var name = cleanDisplayText(comp.name || '');
       if (!name || name.toLowerCase() === 'blueprint') continue;
       var count = typeof comp.itemCount === 'number' ? comp.itemCount : 1;
-      out.push(name + ' x' + count);
+      out.push({ name: name, count: count, text: name + ' x' + count.toLocaleString() });
     }
     return out;
   }
@@ -5386,9 +5450,71 @@
       String(seconds).padStart(2, '0') + 's';
   }
 
+  // Runs `fn` every `visibleMs`, but only every `hiddenMs` while the window is
+  // hidden or minimized, and fires once immediately on becoming visible again so
+  // the displayed value is never stale. The returned handle is a plain object
+  // rather than a timer id so stop() works for both countdowns uniformly.
+  //
+  // Each handle keeps its own callback and cadence. It previously stored both in
+  // shared module state and stopped whatever handle it found there, so starting
+  // one countdown silently killed the other: only the most recently started
+  // countdown ever ticked, and the other froze at its last displayed value with
+  // no error. Callers stop their own previous handle before starting a new one,
+  // so nothing relied on that side effect.
+  function startVisibilityAwareInterval(fn, visibleMs, hiddenMs) {
+    var handle = {
+      fn: fn,
+      visibleMs: visibleMs,
+      hiddenMs: hiddenMs,
+      intervalId: null
+    };
+
+    function schedule() {
+      if (handle.intervalId) window.clearInterval(handle.intervalId);
+      handle.intervalId = window.setInterval(function() {
+        if (handle.fn) handle.fn();
+      }, document.hidden ? handle.hiddenMs : handle.visibleMs);
+    }
+
+    handle.stop = function() {
+      if (handle.intervalId) {
+        window.clearInterval(handle.intervalId);
+        handle.intervalId = null;
+      }
+      handle.fn = null;
+      visibilityTickHandles.delete(handle);
+    };
+
+    visibilityTickHandles.add(handle);
+    schedule();
+    return handle;
+  }
+
+  function stopVisibilityTick(handle) {
+    if (handle && typeof handle.stop === 'function') {
+      handle.stop();
+      return;
+    }
+    if (handle) window.clearInterval(handle);
+  }
+
+  document.addEventListener('visibilitychange', function() {
+    visibilityTickHandles.forEach(function(handle) {
+      if (handle.intervalId) window.clearInterval(handle.intervalId);
+      handle.intervalId = window.setInterval(function() {
+        if (handle.fn) handle.fn();
+      }, document.hidden ? handle.hiddenMs : handle.visibleMs);
+    });
+    if (!document.hidden) {
+      visibilityTickHandles.forEach(function(handle) {
+        if (handle.fn) handle.fn();
+      });
+    }
+  });
+
   function stopPrimeCountdown() {
     if (primeCountdownTimer) {
-      clearInterval(primeCountdownTimer);
+      stopVisibilityTick(primeCountdownTimer);
       primeCountdownTimer = null;
     }
   }
@@ -5408,7 +5534,7 @@
     };
 
     tick();
-    primeCountdownTimer = setInterval(tick, 1000);
+    primeCountdownTimer = startVisibilityAwareInterval(tick, 1000, PRIME_HIDDEN_TICK_MS);
   }
 
   function updatePrimeFrameImages(frameNames, slots, updateBackdrop) {
@@ -6603,6 +6729,17 @@
         img.alt = arcane.name;
         img.loading = 'lazy';
         img.decoding = 'async';
+        // A handful of arcanes reference CDN objects that 404, and an empty
+        // imageName was the only case that used to produce a fallback glyph. A
+        // 404 therefore left a blank hole in the grid. Swap in the glyph instead.
+        img.addEventListener('error', function () {
+          this.remove();
+          if (media.querySelector('.arcane-card-icon-fallback')) return;
+          var fallbackEl = document.createElement('span');
+          fallbackEl.className = 'material-icons-round arcane-card-icon-fallback';
+          fallbackEl.textContent = 'diamond';
+          media.appendChild(fallbackEl);
+        });
         media.appendChild(img);
       } else {
         var fallback = document.createElement('span');
@@ -7581,6 +7718,49 @@
     }
   }
 
+  async function setRivenOverlayEnabled(enabled) {
+    var next = !!enabled;
+    if (!window.electronAPI || !window.electronAPI.setRivenOverlayEnabled) {
+      if (els.rivenOverlayToggle) els.rivenOverlayToggle.checked = false;
+      setRivenOverlayStatus('error', 'Riven overlay is unavailable in this build.');
+      return;
+    }
+
+    try {
+      if (els.rivenOverlayToggle) els.rivenOverlayToggle.disabled = true;
+      setRivenOverlayStatus(next ? 'active' : '', next ? 'Starting riven overlay...' : 'Riven overlay disabled.');
+      var result = await window.electronAPI.setRivenOverlayEnabled(next);
+      var rivenOverlayEnabled = !!(result && result.enabled);
+      if (els.rivenOverlayToggle) els.rivenOverlayToggle.checked = rivenOverlayEnabled;
+      setRivenOverlayStatus(
+        rivenOverlayEnabled ? 'active' : '',
+        rivenOverlayEnabled
+          ? 'Watching EE.log for riven rerolls. Keep Warframe in borderless/windowed mode.'
+          : 'Riven overlay disabled.'
+      );
+      if (!result || !result.ok) {
+        setRivenOverlayStatus('error', result && result.message ? result.message : 'Could not start riven overlay.');
+      }
+    } catch (err) {
+      if (els.rivenOverlayToggle) els.rivenOverlayToggle.checked = false;
+      setRivenOverlayStatus('error', err && err.message ? err.message : 'Could not start riven overlay.');
+    } finally {
+      if (els.rivenOverlayToggle) els.rivenOverlayToggle.disabled = false;
+    }
+  }
+
+  function setRivenOverlayStatus(state, message) {
+    if (!els.rivenOverlayStatus) return;
+    els.rivenOverlayStatus.className = 'relic-overlay-status';
+    if (state) els.rivenOverlayStatus.classList.add('relic-overlay-status-' + state);
+    var icon = els.rivenOverlayStatus.querySelector('.material-icons-round');
+    var text = els.rivenOverlayStatus.querySelector('span:last-child');
+    if (icon) {
+      icon.textContent = state === 'active' ? 'visibility' : state === 'error' ? 'error' : 'visibility_off';
+    }
+    if (text) text.textContent = String(message || 'Riven overlay disabled.');
+  }
+
   function handleRelicOverlayEvent(payload) {
     var type = payload && payload.type ? payload.type : '';
     if (type === 'scan') {
@@ -7601,6 +7781,137 @@
     if (type === 'status') {
       setRelicOverlayStatus(payload && payload.enabled ? 'active' : '', payload && payload.message ? payload.message : '');
     }
+  }
+
+  function handleRivenScanResult(payload) {
+    if (!payload || !payload.success) {
+      if (payload && payload.stage === 'ocr' && payload.text) {
+        console.log('[RivenOverlay] OCR captured riven region text:', payload.text);
+      }
+      console.log('[RivenOverlay] Scan failed:', payload?.error);
+      return;
+    }
+
+    const { riven, grade, price, listingText } = payload;
+    if (!riven || !Array.isArray(riven.stats) || !grade) {
+      console.log('[RivenOverlay] Ignoring incomplete scan result:', payload);
+      return;
+    }
+    console.log('[RivenOverlay] Scan result received:', { riven, grade, price });
+
+    // Create or update a notification/toast with the riven grade and price
+    showRivenGradeNotification(riven, grade, price, listingText);
+  }
+
+  function showRivenGradeNotification(riven, grade, price, listingText) {
+    // Remove any existing notification
+    const existing = document.getElementById('riven-grade-notification');
+    if (existing) existing.remove();
+
+    const gradeColors = { S: '#00d4aa', A: '#4f9eff', B: '#ff8c42', C: '#ff4757' };
+    const gradeColor = gradeColors[grade.grade] || '#a8abb2';
+
+    const notification = document.createElement('div');
+    notification.id = 'riven-grade-notification';
+    notification.style.cssText = `
+      position: fixed;
+      top: 80px;
+      right: 24px;
+      z-index: 10000;
+      width: 360px;
+      background: linear-gradient(135deg, #1a1c23 0%, #0f1115 100%);
+      border: 2px solid ${gradeColor};
+      border-radius: 12px;
+      padding: 16px;
+      color: #e4e6ea;
+      font-family: 'Rajdhani', sans-serif;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05);
+      animation: slideIn 0.3s ease-out;
+    `;
+
+    const statsHtml = riven.stats.map(s => `
+      <div style="
+        background:rgba(255,255,255,0.03);
+        padding:4px 8px;
+        border-radius:4px;
+        border-left:3px solid ${s.isPositive ? '#2ed573' : '#ff4757'};
+        margin: 2px 0;
+      ">
+        <span style="color:#a8abb2;">${s.name}</span>
+        <span style="color:${s.isPositive ? '#2ed573' : '#ff4757'}; font-weight:600; margin-left:8px;">${s.polarity}${s.value}%</span>
+      </div>
+    `).join('');
+
+    const priceHtml = price && price.ok && price.minPrice ? `
+      <div style="margin-top:10px; padding-top:10px; border-top:1px solid #2a2d35; font-size:11px; color:#ffd700; display:flex; justify-content:space-between; align-items:center;">
+        <span>💎 ${price.minPrice}p - ${price.avgPrice}p (${price.count} listings)</span>
+        <button id="riven-copy-listing" style="
+          background:rgba(79,158,255,0.2);
+          border:1px solid #4f9eff;
+          color:#4f9eff;
+          padding:4px 10px;
+          border-radius:4px;
+          font-size:10px;
+          cursor:pointer;
+          font-family:'Rajdhani',sans-serif;
+        ">Copy Listing</button>
+      </div>
+    ` : '';
+
+    notification.innerHTML = `
+      <style>
+        @keyframes slideIn {
+          from { transform: translateX(100%); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+        #riven-grade-notification button:hover { background:#4f9eff !important; color:#0a0b0d !important; }
+      </style>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <div style="font-weight:700; font-size:14px; color:#a8abb2;">RIVEN GRADED</div>
+        <div style="
+          background:${gradeColor};
+          color:#0a0b0d;
+          font-weight:700;
+          font-size:28px;
+          font-family:'JetBrains Mono',monospace;
+          padding:4px 16px;
+          border-radius:6px;
+          letter-spacing:2px;
+        ">${grade.grade}</div>
+      </div>
+      <div style="font-size:12px; color:#6b7280; margin-bottom:8px;">Score: ${grade.score} | ${riven.weaponName}</div>
+      <div style="font-size:11px; color:#4f9eff; margin-bottom:8px;">${riven.rivenName || 'Unnamed Riven'}</div>
+      <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:6px; font-size:11px;">
+        ${statsHtml}
+      </div>
+      ${priceHtml}
+    `;
+
+    document.body.appendChild(notification);
+
+    // Add copy listing functionality
+    const copyBtn = notification.querySelector('#riven-copy-listing');
+    if (copyBtn && listingText) {
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(listingText).then(() => {
+          copyBtn.textContent = 'Copied!';
+          copyBtn.style.background = '#2ed573';
+          copyBtn.style.borderColor = '#2ed573';
+          copyBtn.style.color = '#0a0b0d';
+          setTimeout(() => {
+            if (document.getElementById('riven-grade-notification')) {
+              document.getElementById('riven-grade-notification').remove();
+            }
+          }, 2000);
+        });
+      });
+    }
+
+    // Auto-remove after 15 seconds
+    setTimeout(() => {
+      const notif = document.getElementById('riven-grade-notification');
+      if (notif) notif.remove();
+    }, 15000);
   }
 
   function readFileAsDataUrl(file) {
@@ -7855,6 +8166,659 @@
     return percent.toFixed(precision).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1') + '%';
   }
 
+  /**
+   * Format a drop chance, refusing to print numbers that are not percentages.
+   *
+   * The same `chance` field carries two different units. Most rows are a real
+   * percentage, but storage-container rows are a weight within the container and
+   * run well past 100 (Carbides in a Reinforced Grineer Storage Container is
+   * 303.52), and a handful of rows are 0 where the value is simply unknown. The
+   * old formatter turned all three into "303.52%" and "0%", which is worse than
+   * showing nothing because it looks authoritative.
+   */
+  function formatDropChance(chance) {
+    var numeric = Number(chance);
+    if (!Number.isFinite(numeric) || numeric <= 0) return '';
+    if (numeric > 100) return '';
+    return formatPercentChance(numeric);
+  }
+
+  /**
+   * Work out what kind of source a drop location refers to.
+   *
+   * The `location` field is a single free-text string with no structure, and the
+   * shapes present in the data are quite different:
+   *   "Pluto/Fenton's Field (Skirmish), Rotation A"  planet/mission + rotation
+   *   "Axi I3 Relic"                                void relic
+   *   "Lith A11 Relic (Radiant)"                    void relic with a refinement
+   *   "Neptune/Cephalon Capture (Conclave)"         conclave
+   *   "New Loka, Flawless"                          syndicate mission
+   *   "Thermagnetic Shells"                         open-world/mission name
+   * Splitting these apart is what lets the tab group sources meaningfully
+   * instead of printing one undifferentiated list.
+   */
+  function classifyDropLocation(location) {
+    var raw = String(location || '').trim();
+    if (!raw) return { kind: 'other', label: 'Unknown source', planet: '', mission: raw, rotation: '', relic: '' };
+
+    var rotation = '';
+    var body = raw;
+    var rotationMatch = body.match(/,\s*(Rotation\s+[A-Z])\s*$/i);
+    if (rotationMatch) {
+      rotation = cleanDisplayText(rotationMatch[1]);
+      body = body.slice(0, rotationMatch.index);
+    }
+
+    // Refinement / difficulty qualifier, e.g. "(Radiant)" or "(Skirmish)".
+    var qualifier = '';
+    var qualifierMatch = body.match(/\s*\(([^)]+)\)\s*$/);
+    if (qualifierMatch) {
+      qualifier = cleanDisplayText(qualifierMatch[1]);
+      body = body.slice(0, qualifierMatch.index);
+    }
+    body = body.trim();
+
+    if (/\brelic\b/i.test(raw)) {
+      return {
+        kind: 'relic',
+        label: 'Void Relic',
+        planet: '',
+        mission: cleanDisplayText(body),
+        rotation: rotation,
+        relic: cleanDisplayText(body),
+        qualifier: qualifier
+      };
+    }
+
+    if (/conclave/i.test(raw)) {
+      // Conclave sources carry a planet prefix too ("Neptune/Cephalon Capture
+      // (Conclave)"), so split it the same way as a node rather than leaving the
+      // slash in the mission name.
+      var conclaveSlash = body.indexOf('/');
+      return {
+        kind: 'conclave',
+        label: 'Conclave',
+        planet: conclaveSlash > 0 ? cleanDisplayText(body.slice(0, conclaveSlash)) : '',
+        mission: cleanDisplayText(conclaveSlash > 0 ? body.slice(conclaveSlash + 1) : body),
+        rotation: rotation,
+        relic: '',
+        qualifier: qualifier
+      };
+    }
+
+    var slash = body.indexOf('/');
+    if (slash > 0) {
+      return {
+        kind: 'node',
+        label: rotation ? 'Node Rotation' : 'Open World',
+        planet: cleanDisplayText(body.slice(0, slash)),
+        mission: cleanDisplayText(body.slice(slash + 1)),
+        rotation: rotation,
+        relic: '',
+        qualifier: qualifier
+      };
+    }
+
+    // A comma with no planet reads as "Syndicate, Mission".
+    if (body.indexOf(',') > 0) {
+      return {
+        kind: 'syndicate',
+        label: 'Syndicate',
+        planet: cleanDisplayText(body.slice(0, body.indexOf(','))),
+        mission: cleanDisplayText(body.slice(body.indexOf(',') + 1)),
+        rotation: rotation,
+        relic: '',
+        qualifier: qualifier
+      };
+    }
+
+    if (rotation) {
+      return { kind: 'node', label: 'Node Rotation', planet: '', mission: cleanDisplayText(body), rotation: rotation, relic: '', qualifier: qualifier };
+    }
+
+    return { kind: 'mission', label: 'Mission', planet: '', mission: cleanDisplayText(body), rotation: '', relic: '', qualifier: qualifier };
+  }
+
+  var DROP_GROUP_ORDER = ['relic', 'node', 'mission', 'syndicate', 'conclave', 'other'];
+
+  /**
+   * Relic tier from a relic name, used to pick the right artwork.
+   *
+   * Drop locations name the relic ("Axi I3 Relic", "Lith A11 Relic (Radiant)")
+   * but not the tier separately, and the Relics tab already ships one intact
+   * image per tier, so the prefix is all that is needed.
+   */
+  function getRelicTierFromName(name) {
+    var value = String(name || '').toLowerCase();
+    if (value.indexOf('requiem') === 0) return 'requiem';
+    if (value.indexOf('axi') === 0) return 'axi';
+    if (value.indexOf('lith') === 0) return 'lith';
+    if (value.indexOf('meso') === 0) return 'meso';
+    if (value.indexOf('neo') === 0) return 'neo';
+    return 'relic';
+  }
+
+  /**
+   * Send the user to the Relics tab filtered to one relic.
+   *
+   * Two naming conventions meet here. Drop locations call a relic
+   * "Axi I3 Relic", while the relic directory lists the same object as
+   * "Axi I3 Intact". Searching the drop's full name therefore matched loosely
+   * and landed on a differently-named row, so the suffix is dropped and only the
+   * identifying part is searched - "Axi I3" - which matches either form.
+   *
+   * The relic list is the current rotation, so a relic that is not in it cannot
+   * be opened directly. Landing on the tab with the name in the search box is
+   * honest and still gets the user to the right place.
+   */
+  function openRelicDirectoryForName(relicName) {
+    var full = String(relicName || '').trim();
+    if (!full) return;
+    var query = full.replace(/\s+relic\s*$/i, '').trim() || full;
+    relicSearchQuery = query;
+    if (els.relicSearchInput) els.relicSearchInput.value = query;
+    closeItemInfoModal();
+    showPanel('relics');
+  }
+  var DROP_GROUP_ICONS = {
+    relic: 'inventory_2',
+    node: 'public',
+    mission: 'flag',
+    syndicate: 'groups',
+    conclave: 'sports_esports',
+    other: 'help_outline'
+  };
+  // Enough to cover every source for a normal item without turning the tab into
+  // a wall. Ash alone has 141 raw rows once its parts are counted.
+  var DROP_GROUP_ROW_LIMIT = 40;
+
+  function appendDropRow(container, row, options) {
+    var opts = options || {};
+    var el = document.createElement('div');
+    el.className = 'item-drop-row';
+
+    // A relic source is about the relic, so it leads with the relic's own art
+    // and name. Repeating "Ash Prime Blueprint" on all 24 relic rows said
+    // nothing 23 times over and buried the part that was actually useful.
+    var isRelic = row.kind === 'relic' && (row.relic || row.mission);
+    var relicName = isRelic ? (row.relic || row.mission) : '';
+    var dropsName = isRelic ? '' : (row.dropsName || row.rarity || 'Drops here');
+    var hideName = isRelic || opts.hideName;
+
+    var media = document.createElement('span');
+    media.className = 'item-drop-icon';
+    var imageUrl = '';
+    if (isRelic) {
+      imageUrl = getRelicTierImageUrl(getRelicTierFromName(relicName));
+    } else {
+      var catalogItem = getCatalogItemByExactName(dropsName);
+      if (catalogItem) imageUrl = getItemImageUrl(catalogItem);
+      else if (opts.fallbackImageName) imageUrl = CDN_URL + opts.fallbackImageName;
+    }
+    if (imageUrl) {
+      var img = document.createElement('img');
+      img.loading = 'lazy';
+      img.alt = '';
+      img.addEventListener('error', function () { this.style.display = 'none'; });
+      img.src = imageUrl;
+      media.appendChild(img);
+    }
+
+    var body = document.createElement('span');
+    body.className = 'item-drop-body';
+
+    var title = document.createElement('span');
+    title.className = 'item-drop-title';
+    // A relic row is named after the relic, not after the blueprint that comes
+    // out of it. For every other row the item name is suppressed when the group
+    // header already carries it.
+    title.textContent = isRelic ? relicName : (hideName ? '' : dropsName);
+    if (!isRelic && !hideName && row.quantity > 1) {
+      var qty = document.createElement('span');
+      qty.className = 'item-drop-qty';
+      qty.textContent = 'x' + row.quantity;
+      title.appendChild(qty);
+    }
+    if (title.textContent) body.appendChild(title);
+
+    var sub = document.createElement('span');
+    sub.className = 'item-drop-sub' + (isRelic ? ' is-primary' : '');
+    var subParts = [];
+    if (!isRelic && row.planet) subParts.push(row.planet);
+    if (!isRelic && row.mission && row.mission !== row.planet) subParts.push(row.mission);
+    if (isRelic && row.qualifier) subParts.push(row.qualifier);
+    if (row.rotation) subParts.push(row.rotation);
+    var subText = subParts.join(' - ');
+    if (!isRelic && !subText) subText = row.mission || '';
+    sub.textContent = subText;
+    if (subText) body.appendChild(sub);
+
+    el.appendChild(media);
+    el.appendChild(body);
+
+    if (isRelic) {
+      // Jump to the Relics tab with this relic in the search box.
+      var go = document.createElement('span');
+      go.className = 'item-drop-go';
+      go.textContent = 'Relics';
+      el.appendChild(go);
+      el.classList.add('is-link');
+      el.setAttribute('role', 'button');
+      el.setAttribute('tabindex', '0');
+      el.setAttribute('data-relic-open', relicName);
+      el.title = 'Open ' + relicName + ' in the Relics tab';
+    }
+
+    if (row.rarity) {
+      var badge = document.createElement('span');
+      badge.className = 'item-drop-rarity rarity-' + row.rarity.toLowerCase().replace(/[^a-z]+/g, '');
+      badge.textContent = row.rarity;
+      el.appendChild(badge);
+    }
+
+    if (row.chance) {
+      var chance = document.createElement('span');
+      chance.className = 'item-drop-chance';
+      chance.textContent = row.chance;
+      el.appendChild(chance);
+    }
+
+    container.appendChild(el);
+  }
+
+  function appendDropGroups(container, groups, emptyText, fallbackImageName) {
+    var totalShown = 0;
+    for (var g = 0; g < groups.length; g++) {
+      var group = groups[g];
+      if (!group.rows || group.rows.length === 0) continue;
+
+      var wrap = document.createElement('div');
+      wrap.className = 'item-drop-group';
+
+      // When every row in this group names the same item, hoist that name into
+      // the header so it is stated once instead of on every row.
+      var sharedName = '';
+      for (var n = 0; n < group.rows.length; n++) {
+        var rowName = group.rows[n].dropsName || '';
+        if (!rowName) { sharedName = ''; break; }
+        if (n === 0) sharedName = rowName;
+        else if (rowName !== sharedName) { sharedName = ''; break; }
+      }
+      var hideName = !!sharedName;
+
+      var head = document.createElement('div');
+      head.className = 'item-drop-group-head';
+      var headIcon = document.createElement('span');
+      headIcon.className = 'material-icons-round';
+      headIcon.textContent = DROP_GROUP_ICONS[group.kind] || DROP_GROUP_ICONS.other;
+      var headLabel = document.createElement('span');
+      headLabel.className = 'item-drop-group-label';
+      headLabel.textContent = group.label || 'Sources';
+      head.appendChild(headIcon);
+      head.appendChild(headLabel);
+
+      if (sharedName) {
+        var headItem = document.createElement('span');
+        headItem.className = 'item-drop-group-item';
+        headItem.textContent = sharedName;
+        head.appendChild(headItem);
+      }
+
+      var headCount = document.createElement('span');
+      headCount.className = 'item-drop-group-count';
+      headCount.textContent = String(group.rows.length);
+      head.appendChild(headCount);
+      wrap.appendChild(head);
+
+      var shown = Math.min(group.rows.length, DROP_GROUP_ROW_LIMIT);
+      for (var r = 0; r < shown; r++) {
+        appendDropRow(wrap, group.rows[r], { hideName: hideName, fallbackImageName: fallbackImageName });
+      }
+      totalShown += shown;
+
+      if (group.rows.length > shown) {
+        var more = document.createElement('div');
+        more.className = 'item-drop-more';
+        var hidden = group.rows.length - shown;
+        more.textContent = '+' + hidden + ' more ' + (hidden === 1 ? 'source' : 'sources') + ' not shown';
+        wrap.appendChild(more);
+      }
+
+      container.appendChild(wrap);
+    }
+
+    if (totalShown === 0 && emptyText) {
+      appendEmptyInfoRow(container, emptyText);
+    }
+  }
+
+  /**
+   * Find the other items in this item's variant family.
+   *
+   * warframestat exposes `isPrime` and `vaulted` per item but has no family id,
+   * so the family has to be recovered from names. That is reliable for the cases
+   * that matter, and deliberately narrow where it is not:
+   *
+   *   base <-> Prime   exact: "Soma" <-> "Soma Prime", keyed on the shared stem
+   *   Kuva             "Kuva Ballista" -> "Ballista", so a Kuva item links to the
+   *                    weapon it drops as
+   *   siblings         Prime items sharing a stem, e.g. "Aksomati" and
+   *                    "Aksomati Prime"
+   *
+   * Skins, glyphs and other cosmetics that merely start with the same word are
+   * excluded, because "Ash Helmet" is not a variant of "Ash".
+   */
+  function buildItemVariantLinks(item) {
+    var out = [];
+    if (!item || !item.name) return out;
+
+    var lookup = getItemNameLookup();
+    var name = String(item.name);
+    var type = String(item.type || '');
+    var category = String(item.category || '');
+
+    // Only real gear participates. Cosmetics share names with everything.
+    var gearTypes = /warframe|primary|secondary|melee|bow|launcher|heavy|pistol|rifle|sniper|shotgun|smga|blade|gunblade|polearm|hammer|axe|sword|staff|claw|ephemera/i;
+    if (!gearTypes.test(type) && !/warframes|primary|secondary|melee/i.test(category)) return out;
+
+    var isPrime = item.isPrime === true;
+    var isKuva = /^kuva\s+/i.test(name);
+    var stem = name;
+    if (isKuva) {
+      stem = name.replace(/^kuva\s+/i, '');
+    } else if (isPrime) {
+      stem = name.replace(/\s+prime$/i, '');
+    }
+
+    function pushVariant(target, relation) {
+      if (!target || target.uniqueName === item.uniqueName) return;
+      var key = toLookupKey(target.name);
+      if (!key) return;
+      for (var i = 0; i < out.length; i++) {
+        if (toLookupKey(out[i].name) === key) return;
+      }
+      out.push({ item: target, relation: relation });
+    }
+
+    if (isKuva) {
+      var baseForKuva = lookup[toLookupKey(stem)];
+      if (baseForKuva) pushVariant(baseForKuva, 'Drops as this weapon');
+      var primeForKuva = lookup[toLookupKey(stem + ' Prime')];
+      if (primeForKuva) pushVariant(primeForKuva, 'Prime version');
+    } else if (isPrime) {
+      // A Prime links back to its base. Looking up `stem + ' Prime'` here would
+      // resolve to the item itself, so the section came out empty for every
+      // Prime item.
+      var baseItem = lookup[toLookupKey(stem)];
+      if (baseItem) pushVariant(baseItem, 'Non-Prime version');
+    } else {
+      var primeItem = lookup[toLookupKey(stem + ' Prime')];
+      if (primeItem) {
+        pushVariant(primeItem, 'Prime version');
+      } else {
+        // No Prime exists; say so rather than leaving the section blank, since
+        // "this has no Prime" is itself the answer for most base weapons.
+        out.push({ item: null, relation: 'No Prime version exists', missing: true, name: stem + ' Prime' });
+      }
+    }
+
+    return out;
+  }
+
+  function renderItemInfoVariants(item) {
+    var container = els.itemInfoVariants;
+    var section = els.itemInfoVariantsSection;
+    if (!container || !section) return;
+
+    var links = buildItemVariantLinks(item);
+    container.textContent = '';
+
+    if (!links.length) {
+      section.classList.add('hidden');
+      return;
+    }
+    section.classList.remove('hidden');
+
+    for (var i = 0; i < links.length; i++) {
+      var link = links[i];
+
+      if (link.missing) {
+        var missing = document.createElement('div');
+        missing.className = 'item-variant-row is-missing';
+        var missingIcon = document.createElement('span');
+        missingIcon.className = 'material-icons-round';
+        missingIcon.textContent = 'block';
+        var missingText = document.createElement('span');
+        missingText.className = 'item-variant-text';
+        missingText.textContent = link.relation;
+        missing.appendChild(missingIcon);
+        missing.appendChild(missingText);
+        container.appendChild(missing);
+        continue;
+      }
+
+      var target = link.item;
+      var row = document.createElement('button');
+      row.className = 'item-variant-row';
+      row.type = 'button';
+      row.setAttribute('data-item-info-open-unique', target.uniqueName || '');
+
+      var imageUrl = getItemImageUrl(target);
+      var media = document.createElement('span');
+      media.className = 'item-variant-icon';
+      if (imageUrl) {
+        var img = document.createElement('img');
+        img.loading = 'lazy';
+        img.alt = '';
+        img.addEventListener('error', function () { this.style.display = 'none'; });
+        img.src = imageUrl;
+        media.appendChild(img);
+      }
+
+      var body = document.createElement('span');
+      body.className = 'item-variant-text';
+      var title = document.createElement('span');
+      title.className = 'item-variant-title';
+      title.textContent = cleanDisplayText(target.name);
+
+      var notes = [link.relation];
+      if (target.vaulted === true) notes.push('Vaulted');
+      if (target.isPrime === true) notes.push('Prime');
+      var sub = document.createElement('span');
+      sub.className = 'item-variant-sub';
+      sub.textContent = notes.join(' - ');
+
+      body.appendChild(title);
+      body.appendChild(sub);
+      row.appendChild(media);
+      row.appendChild(body);
+
+      var chevron = document.createElement('span');
+      chevron.className = 'material-icons-round item-variant-chevron';
+      chevron.textContent = 'chevron_right';
+      row.appendChild(chevron);
+
+      container.appendChild(row);
+    }
+  }
+
+  /**
+   * Whether the item can be bought or sold on warframe.market.
+   *
+   * `tradable` is enriched asynchronously, so an item can be tradeable while the
+   * field is still undefined. Rather than hide the action and leave the user
+   * wondering, the caller starts the load and this returns false until it lands.
+   */
+  function isItemTradeable(item) {
+    if (!item) return false;
+    if (shouldTreatAsTradableMod(item)) return true;
+    if (item.tradable === true) return true;
+    if (item.tradable === false && tradabilityEnriched) return false;
+    return false;
+  }
+
+  /**
+   * Take the user to the market for one craft part of the current item.
+   *
+   * Going through a plain market search does not work here: set components are
+   * folded into their parent set's group, so searching "Soma Prime Barrel" only
+   * ever finds the set. The market module exposes a direct route to a single
+   * component's orders, which is what this uses, falling back to a search if the
+   * part has no listing.
+   */
+  async function openMarketForPart(partName) {
+    var name = String(partName || '').trim();
+    if (!name) return;
+
+    if (window.warframeMarket && typeof window.warframeMarket.openPartOrdersByName === 'function') {
+      await showPanel('market');
+      var result = await window.warframeMarket.openPartOrdersByName(name);
+      if (result && result.ok) return;
+      // No listing for that part; fall back to searching so the user still lands
+      // somewhere useful rather than on an unchanged panel.
+    }
+    await openMarketForChecklistItem({ name: name });
+  }
+
+  function renderItemInfoTradeAction(container, item) {
+    if (!container) return;
+    container.textContent = '';
+    if (!item) return;
+
+    var wrap = document.createElement('div');
+    wrap.className = 'item-info-trade-action';
+
+    var button = document.createElement('button');
+    button.className = 'btn btn-primary item-info-trade-btn';
+    button.type = 'button';
+    button.id = 'item-info-trade-btn';
+
+    var icon = document.createElement('span');
+    icon.className = 'material-icons-round';
+    icon.textContent = 'storefront';
+
+    var label = document.createElement('span');
+    label.className = 'item-info-trade-label';
+
+    var tradeable = isItemTradeable(item);
+    if (tradeable) {
+      label.textContent = 'Trade ' + cleanDisplayText(item.name || 'this item') + ' on warframe.market';
+      button.appendChild(icon);
+      button.appendChild(label);
+      button.addEventListener('click', function () {
+        openMarketForChecklistItem(item);
+      });
+    } else {
+      // Not confirmed tradeable yet. Say so rather than rendering a dead button.
+      icon.textContent = 'hourglass_empty';
+      label.textContent = 'Checking warframe.market availability...';
+      button.appendChild(icon);
+      button.appendChild(label);
+      button.disabled = true;
+
+      ensureTradabilityLoaded(allItems).then(function (ready) {
+        if (!ready) return;
+        if (!currentItemInfo || currentItemInfo.uniqueName !== item.uniqueName) return;
+        renderItemInfoTradeAction(container, currentItemInfo);
+      }).catch(function () { /* leave the checking state in place */ });
+    }
+
+    wrap.appendChild(button);
+    container.appendChild(wrap);
+  }
+
+  function renderItemInfoDrops(container, item) {
+    if (!container) return;
+    container.textContent = '';
+
+    var data = buildItemDropGroups(item);
+
+    if (data.hints && data.hints.length) {
+      var hintWrap = document.createElement('div');
+      hintWrap.className = 'item-drop-group item-drop-group-hints';
+      var hintHead = document.createElement('div');
+      hintHead.className = 'item-drop-group-head';
+      var hintIcon = document.createElement('span');
+      hintIcon.className = 'material-icons-round';
+      hintIcon.textContent = 'lightbulb';
+      var hintLabel = document.createElement('span');
+      hintLabel.textContent = 'How to obtain';
+      hintHead.appendChild(hintIcon);
+      hintHead.appendChild(hintLabel);
+      hintWrap.appendChild(hintHead);
+
+      for (var h = 0; h < data.hints.length; h++) {
+        var hint = data.hints[h];
+        var hintRow = document.createElement('div');
+        hintRow.className = 'item-drop-row';
+        var hintBody = document.createElement('span');
+        hintBody.className = 'item-drop-body';
+        var hintTitle = document.createElement('span');
+        hintTitle.className = 'item-drop-title';
+        hintTitle.textContent = cleanDisplayText(hint.main);
+        var hintSub = document.createElement('span');
+        hintSub.className = 'item-drop-sub';
+        hintSub.textContent = cleanDisplayText(hint.sub || '');
+        hintBody.appendChild(hintTitle);
+        hintBody.appendChild(hintSub);
+        hintRow.appendChild(hintBody);
+        hintWrap.appendChild(hintRow);
+      }
+      container.appendChild(hintWrap);
+    }
+
+    if (data.direct) {
+      var directWrap = document.createElement('div');
+      directWrap.className = 'item-drop-part';
+      var directTitle = document.createElement('div');
+      directTitle.className = 'item-drop-part-title';
+      directTitle.textContent = cleanDisplayText(item.name || 'Item');
+      directWrap.appendChild(directTitle);
+      appendDropGroups(directWrap, data.direct.groups, 'No drop sources listed for this item.');
+      container.appendChild(directWrap);
+    }
+
+    for (var p = 0; p < data.parts.length; p++) {
+      var part = data.parts[p];
+      var partWrap = document.createElement('div');
+      partWrap.className = 'item-drop-part';
+
+      var partTitle = document.createElement(part.marketName ? 'button' : 'div');
+      partTitle.className = 'item-drop-part-title' + (part.marketName ? ' is-action' : '');
+      if (part.marketName) {
+        partTitle.type = 'button';
+        partTitle.setAttribute('data-part-market', part.marketName);
+        partTitle.title = 'Search warframe.market for ' + part.marketName;
+      }
+      if (part.imageName) {
+        var partImg = document.createElement('img');
+        partImg.className = 'item-drop-part-icon';
+        partImg.loading = 'lazy';
+        partImg.alt = '';
+        partImg.addEventListener('error', function () { this.style.display = 'none'; });
+        partImg.src = CDN_URL + part.imageName;
+        partTitle.appendChild(partImg);
+      }
+      var partLabel = document.createElement('span');
+      partLabel.textContent = part.part;
+      partTitle.appendChild(partLabel);
+      if (part.marketName) {
+        var partGo = document.createElement('span');
+        partGo.className = 'item-drop-part-go';
+        partGo.textContent = 'Market';
+        partTitle.appendChild(partGo);
+      }
+      partWrap.appendChild(partTitle);
+
+      appendDropGroups(partWrap, part.groups, 'No drop sources listed for this part.', part.imageName);
+      container.appendChild(partWrap);
+    }
+
+    if (!data.direct && data.parts.length === 0) {
+      appendEmptyInfoRow(container, 'No drop source data found for this item.');
+    }
+  }
+
   function setActiveInfoTab(tab) {
     if (!els.itemInfoTabInfo) return;
     var isInfo = tab === 'info';
@@ -7880,6 +8844,19 @@
     els.itemInfoPaneResources.classList.toggle('hidden', !isResources);
     if (els.itemInfoPaneWiki) els.itemInfoPaneWiki.classList.toggle('hidden', !isWiki);
     if (els.itemInfoPaneBuild) els.itemInfoPaneBuild.classList.toggle('hidden', !isBuild);
+
+    // The wiki tab holds a full article, so the window opens out to a desktop
+    // width while it is active and returns to normal otherwise.
+    //
+    // The class goes on the inner .item-info-modal, not on #item-info-modal:
+    // that id is the full-screen overlay, while the width rules are defined on
+    // the panel inside it.
+    if (els.itemInfoModal) {
+      var infoPanel = els.itemInfoModal.querySelector('.item-info-modal');
+      if (infoPanel) {
+        infoPanel.classList.toggle('is-wiki-wide', isWiki);
+      }
+    }
   }
 
   function renderSummary(item) {
@@ -7966,8 +8943,23 @@
       setActiveInfoTab('info');
     }
     updateWikiPaneForCurrentItem();
-    populateInfoList(els.itemInfoFarmList, buildFarmEntries(item), 'No farm source data found.');
+    renderItemInfoVariants(item);
+    renderItemInfoDrops(els.itemInfoFarmList, item);
+    renderItemInfoTradeAction(els.itemInfoTradeAction, item);
     populateCraftInfoList(els.itemInfoCraftList, item);
+
+    // Drop and ingredient rows resolve icons through the resource catalog, which
+    // is only populated on demand. Without this the rows rendered iconless until
+    // the user happened to open Resource Search, so kick the load off here and
+    // repaint once it lands.
+    if (!resourceCatalogLoaded && !resourceCatalogPromise) {
+      ensureResourceCatalogLoaded().then(function () {
+        if (!currentItemInfo || els.itemInfoModal.classList.contains('hidden')) return;
+        if (currentItemInfo.uniqueName !== item.uniqueName) return;
+        renderItemInfoDrops(els.itemInfoFarmList, currentItemInfo);
+        populateCraftInfoList(els.itemInfoCraftList, currentItemInfo);
+      }).catch(function () { /* icons are an enhancement, not a requirement */ });
+    }
 
     if (config.prefetchWiki !== false) {
       prefetchWikiArticle(item);
@@ -8056,10 +9048,9 @@
       add('In-Game Market Purchase', 'Buy a fully built copy from the Market for ' + item.marketCost.toLocaleString() + ' Platinum.');
     }
 
-    if (hints.length === 0) {
-      add('Acquisition', 'Check codex/market entries for current acquisition details for this item.');
-    }
-
+    // No fallback hint. A row reading "Acquisition - Check codex/market entries"
+    // told the user nothing they could not already see, and it appeared as a
+    // real entry in the new Mission & Drops list where it looked like data.
     return hints;
   }
 
@@ -8122,6 +9113,142 @@
       entries.push({ main: values[v].main, sub: values[v].sub || 'Drop source' });
     }
     return entries;
+  }
+
+  /**
+   * Build the Mission & Drops view as grouped, structured data.
+   *
+   * The previous implementation flattened every source into one "mission |
+   * everything else" text row. That was lossy in a specific way: for a Warframe
+   * such as Ash, `item.drops` is empty and all the data lives on the components,
+   * where each row's `type` says what *actually* drops - "Ash Chassis Blueprint",
+   * not "Chassis". Printing the component name as the source therefore described
+   * the wrong item, and every relic, rotation and node source looked alike.
+   *
+   * Returns:
+   *   parts   - one entry per craftable part, each with its own drop groups
+   *   direct  - drop groups for the item itself (resources, mods, blueprints)
+   *   hints   - non-drop acquisition notes (Kuva, Sister, dojo research, ...)
+   *   total   - raw row count, so the UI can say what it is not showing
+   */
+  function buildItemDropGroups(item) {
+    var result = { parts: [], direct: null, hints: [], total: 0 };
+    if (!item) return result;
+
+    function collectDrops(drops) {
+      var groups = Object.create(null);
+      var seen = Object.create(null);
+      var count = 0;
+
+      for (var i = 0; i < (drops || []).length; i++) {
+        var d = drops[i] || {};
+        var place = classifyDropLocation(d.location);
+        if (!place.mission && !place.relic) continue;
+
+        var rarity = cleanDisplayText(d.rarity || '');
+        var chance = formatDropChance(d.chance);
+        // What actually drops. Falls back to the row's own type, then to the
+        // rarity, because a source with no item name says nothing useful.
+        var dropsName = cleanDisplayText(d.type || '');
+        var quantity = Number(d.itemQuantity);
+
+        var key = [place.kind, place.planet, place.mission, place.rotation, place.relic, dropsName, rarity, chance].join('|');
+        if (seen[key]) continue;
+        seen[key] = true;
+        count++;
+
+        if (!groups[place.kind]) groups[place.kind] = [];
+        groups[place.kind].push({
+          kind: place.kind,
+          groupLabel: place.label,
+          planet: place.planet,
+          mission: place.mission,
+          rotation: place.rotation,
+          relic: place.relic,
+          qualifier: place.qualifier,
+          rarity: rarity,
+          chance: chance,
+          dropsName: dropsName,
+          quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 0
+        });
+      }
+
+      var ordered = [];
+      for (var g = 0; g < DROP_GROUP_ORDER.length; g++) {
+        var kind = DROP_GROUP_ORDER[g];
+        var rows = groups[kind];
+        if (!rows || rows.length === 0) continue;
+        // Relic and rotation sources first: they are the ones worth farming.
+        rows.sort(function (a, b) {
+          if (a.chance && b.chance) return parseFloat(b.chance) - parseFloat(a.chance);
+          if (a.chance) return -1;
+          if (b.chance) return 1;
+          return a.mission.localeCompare(b.mission);
+        });
+        ordered.push({ kind: kind, label: place ? '' : '', rows: rows });
+      }
+      for (var k in groups) {
+        if (DROP_GROUP_ORDER.indexOf(k) === -1) ordered.push({ kind: k, label: 'Other', rows: groups[k] });
+      }
+      for (var o = 0; o < ordered.length; o++) {
+        if (!ordered[o].label) {
+          var sample = ordered[o].rows[0];
+          ordered[o].label = sample ? sample.groupLabel : 'Other';
+        }
+      }
+
+      return { groups: ordered, count: count };
+    }
+
+    var direct = collectDrops(item.drops);
+    if (direct.count > 0) {
+      result.direct = direct;
+      result.total += direct.count;
+    }
+
+    if (Array.isArray(item.components)) {
+      for (var c = 0; c < item.components.length; c++) {
+        var comp = item.components[c] || {};
+        if (!Array.isArray(comp.drops) || comp.drops.length === 0) continue;
+        var part = collectDrops(comp.drops);
+        if (part.count === 0) continue;
+        result.total += part.count;
+        // The component is named generically ("Barrel"), which is useless as a
+        // market query. The drop rows carry the real listing name
+        // ("Acceltra Prime Barrel"), so the most frequent one becomes the
+        // part's searchable name.
+        var nameCounts = Object.create(null);
+        for (var gi = 0; gi < part.groups.length; gi++) {
+          var grow = part.groups[gi].rows;
+          for (var ri = 0; ri < grow.length; ri++) {
+            var gname = grow[ri].dropsName;
+            if (!gname) continue;
+            nameCounts[gname] = (nameCounts[gname] || 0) + 1;
+          }
+        }
+        var bestName = '';
+        var bestCount = 0;
+        for (var candidate in nameCounts) {
+          if (nameCounts[candidate] > bestCount) {
+            bestCount = nameCounts[candidate];
+            bestName = candidate;
+          }
+        }
+        var compName = cleanDisplayText(comp.name || 'Component');
+        result.parts.push({
+          part: compName,
+          // Only worth offering as a market shortcut when it is genuinely a
+          // distinct listing rather than the set name repeated.
+          marketName: bestName && toLookupKey(bestName) !== toLookupKey(item.name) ? bestName : '',
+          imageName: String(comp.imageName || '').trim(),
+          groups: part.groups,
+          count: part.count
+        });
+      }
+    }
+
+    result.hints = buildAcquisitionHintEntries(item);
+    return result;
   }
 
   function buildCraftEntries(item) {
@@ -8198,11 +9325,46 @@
       }
     }
 
-    var isFrameOrMech = String(item && item.category ? item.category : '').toLowerCase() === 'warframes' || isNecramechItem(item);
+    // Icons are collected from every component, including the blueprint, which
+    // getCraftPartEntries deliberately skips because a blueprint is not a part
+    // with a sub-recipe. Reading imageName straight off the component list keeps
+    // the artwork complete without changing what counts as an expandable part.
+    var iconMap = Object.create(null);
+    var components = item && Array.isArray(item.components) ? item.components : [];
+    for (var c = 0; c < components.length; c++) {
+      var comp = components[c] || {};
+      var compKey = toLookupKey(comp.name || '');
+      var compImage = String(comp.imageName || '').trim();
+      if (compKey && compImage && !iconMap[compKey]) {
+        iconMap[compKey] = compImage;
+      }
+    }
 
     for (var e = 0; e < entries.length; e++) {
       var row = document.createElement('div');
       row.className = 'item-info-row';
+
+      var rowKey = toLookupKey(entries[e].main);
+      var iconName = iconMap[rowKey] || '';
+
+      // The slot is always emitted, even with no art, so every row keeps the
+      // same column count and the label never shifts into the icon column.
+      var iconSlot = document.createElement('span');
+      iconSlot.className = 'item-info-row-icon-slot';
+      if (iconName) {
+        var thumb = document.createElement('img');
+        thumb.className = 'item-info-row-icon';
+        thumb.loading = 'lazy';
+        thumb.alt = '';
+        // Hide a broken image rather than leaving a torn placeholder. Parts fall
+        // back to a type glyph when the CDN has no art for them.
+        thumb.addEventListener('error', function() {
+          this.style.display = 'none';
+        });
+        thumb.src = CDN_URL + iconName;
+        iconSlot.appendChild(thumb);
+      }
+      row.appendChild(iconSlot);
 
       var main = document.createElement('span');
       main.className = 'item-info-row-main';
@@ -8212,16 +9374,23 @@
       sub.className = 'item-info-row-sub';
       sub.textContent = cleanDisplayText(entries[e].sub || '');
 
-      var partResources = partMap[toLookupKey(entries[e].main)] || null;
-      var shouldForceToggle = isFrameOrMech && String(entries[e].main || '').toLowerCase() !== 'credits';
+      // The expander is offered only when there is a sub-recipe to reveal.
+      //
+      // It used to be forced for every Warframe/Mech part, so parts with no
+      // published recipe - which is most frame parts, since warframestat lists
+      // no recipe for AshPrimeChassisComponent and friends - rendered a chevron
+      // that opened onto "No detailed sub-recipe is listed for this part in the
+      // current API data." A dead control that reports its own emptiness in
+      // internal wording is worse than no control.
+      var partResources = partMap[rowKey] || null;
 
-      if (partResources || shouldForceToggle) {
+      if (partResources && partResources.length > 0) {
         row.classList.add('has-part-toggle');
 
         var toggle = document.createElement('button');
         toggle.className = 'item-info-part-toggle';
         toggle.type = 'button';
-        toggle.setAttribute('aria-label', 'Show part resources');
+        toggle.setAttribute('aria-label', 'Show what ' + cleanDisplayText(entries[e].main) + ' is built from');
         toggle.setAttribute('aria-expanded', 'false');
 
         var icon = document.createElement('span');
@@ -8231,10 +9400,45 @@
 
         var detail = document.createElement('div');
         detail.className = 'item-info-part-details hidden';
-        if (partResources && partResources.length > 0) {
-          detail.textContent = joinDisplayParts(partResources.slice(0, 10));
-        } else {
-          detail.textContent = 'No detailed sub-recipe is listed for this part in the current API data.';
+        // Each ingredient gets its own icon where the catalog knows the item,
+        // so a part's full cost is readable at a glance.
+        var shownIngredients = partResources.slice(0, 12);
+        for (var ri = 0; ri < shownIngredients.length; ri++) {
+          var ingredient = shownIngredients[ri];
+          var ingredientRow = document.createElement('div');
+          ingredientRow.className = 'item-info-ingredient';
+
+          var ingredientIcon = document.createElement('span');
+          ingredientIcon.className = 'item-info-ingredient-icon';
+          var ingredientItem = getCatalogItemByExactName(ingredient.name);
+          var ingredientImage = ingredientItem ? getItemImageUrl(ingredientItem) : '';
+          if (ingredientImage) {
+            var ingredientImg = document.createElement('img');
+            ingredientImg.loading = 'lazy';
+            ingredientImg.alt = '';
+            ingredientImg.addEventListener('error', function () { this.style.display = 'none'; });
+            ingredientImg.src = ingredientImage;
+            ingredientIcon.appendChild(ingredientImg);
+          }
+          ingredientRow.appendChild(ingredientIcon);
+
+          var ingredientName = document.createElement('span');
+          ingredientName.className = 'item-info-ingredient-name';
+          ingredientName.textContent = ingredient.name;
+          ingredientRow.appendChild(ingredientName);
+
+          var ingredientCount = document.createElement('span');
+          ingredientCount.className = 'item-info-ingredient-count';
+          ingredientCount.textContent = 'x' + Number(ingredient.count || 0).toLocaleString();
+          ingredientRow.appendChild(ingredientCount);
+
+          detail.appendChild(ingredientRow);
+        }
+        if (partResources.length > shownIngredients.length) {
+          var moreIngredients = document.createElement('div');
+          moreIngredients.className = 'item-info-ingredient-more';
+          moreIngredients.textContent = '+' + (partResources.length - shownIngredients.length) + ' more';
+          detail.appendChild(moreIngredients);
         }
 
         toggle.addEventListener('click', function(targetRow, targetDetail, targetToggle) {
@@ -9406,6 +10610,29 @@
 
     els.resourceResultsGrid.appendChild(fragment);
     renderResourceDetail(selectedEntry);
+  }
+
+  /**
+   * Suspend the glass while the window is being resized.
+   *
+   * Every blurred surface has to be re-composited on each frame of a resize drag.
+   * With the sidebar and topbar carrying a large-radius backdrop-filter that is
+   * enough work to make the window feel frozen while dragging the edge. The blur
+   * is dropped for the duration of the drag and restored once it settles, so the
+   * glass is only ever computed on a static layout.
+   */
+  function installResizeGlassGuard() {
+    if (!document.body) return;
+    var settleTimer = 0;
+    var markResizing = function () {
+      document.body.classList.add('is-resizing');
+      if (settleTimer) window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(function () {
+        document.body.classList.remove('is-resizing');
+        settleTimer = 0;
+      }, 220);
+    };
+    window.addEventListener('resize', markResizing, { passive: true });
   }
 
   function isWikiTabActive() {
@@ -11505,7 +12732,7 @@
 
   function stopCycleCountdown() {
     if (cycleCountdownTimer) {
-      clearInterval(cycleCountdownTimer);
+      stopVisibilityTick(cycleCountdownTimer);
       cycleCountdownTimer = null;
     }
     if (cycleAutoRefreshTimeout) {
@@ -11634,7 +12861,7 @@
   function startCycleCountdown() {
     stopCycleCountdown();
     updateCycleCountdowns();
-    cycleCountdownTimer = setInterval(updateCycleCountdowns, 1000);
+    cycleCountdownTimer = startVisibilityAwareInterval(updateCycleCountdowns, 1000, CYCLE_HIDDEN_TICK_MS);
   }
 
   function renderCycleItemCards(container, names, noteText, options) {
@@ -11895,6 +13122,10 @@
 
   // Fallback raw URLs from wfcd/warframe-items GitHub repo (used when warframestat API is down)
   const WFCD_RAW_BASE = 'https://raw.githubusercontent.com/WFCD/warframe-items/master/data/json/';
+
+  // Upper bound for a single WFCD catalog request. Without it a stalled TCP
+  // connection never settles and the relics panel hangs on its loading state.
+  const WFCD_FETCH_TIMEOUT_MS = 20000;
   const WARFRAMESTAT_ENGLISH_HEADERS = Object.freeze({ 'Accept-Language': 'en' });
   const WFCD_FALLBACK_FILES = [
     'Warframes.json',
@@ -11965,12 +13196,31 @@
   var wfcdSingleFileCache = Object.create(null);
   async function fetchWfcdSingleFile(filename) {
     if (wfcdSingleFileCache[filename]) return wfcdSingleFileCache[filename];
-    var resp = await fetch(WFCD_RAW_BASE + filename, { cache: 'force-cache' });
-    if (!resp.ok) throw new Error('WFCD ' + filename + ' HTTP ' + resp.status);
-    var data = await resp.json();
-    if (!Array.isArray(data)) throw new Error('WFCD ' + filename + ' invalid');
-    wfcdSingleFileCache[filename] = data;
-    return data;
+
+    // Without a timeout a stalled connection to raw.githubusercontent.com leaves
+    // this promise pending forever, and because the cache is only written on
+    // success the panel sits on "Loading relic catalog..." with no way out and
+    // no error. Every retry then queues behind the same dead promise.
+    var controller = new AbortController();
+    var timer = setTimeout(function () { controller.abort(); }, WFCD_FETCH_TIMEOUT_MS);
+    try {
+      var resp = await fetch(WFCD_RAW_BASE + filename, {
+        cache: 'force-cache',
+        signal: controller.signal
+      });
+      if (!resp.ok) throw new Error('WFCD ' + filename + ' HTTP ' + resp.status);
+      var data = await resp.json();
+      if (!Array.isArray(data)) throw new Error('WFCD ' + filename + ' invalid');
+      wfcdSingleFileCache[filename] = data;
+      return data;
+    } catch (err) {
+      if (err && err.name === 'AbortError') {
+        throw new Error('WFCD ' + filename + ' timed out after ' + (WFCD_FETCH_TIMEOUT_MS / 1000) + 's');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // Fetch all items: tries warframestat /items first, falls back to WFCD aggregate
@@ -12095,6 +13345,9 @@
   }
 
   function handleItemsAutoRefreshWake() {
+    // A minimized or hidden window has nobody looking at it, so a poll there is
+    // pure background traffic. The catch-up happens on the way back to visible.
+    if (document.hidden) return;
     refreshItemsInBackground(false);
   }
 
@@ -12103,7 +13356,7 @@
     itemsAutoRefreshInitialized = true;
 
     itemsRefreshInterval = window.setInterval(function() {
-      refreshItemsInBackground(false);
+      handleItemsAutoRefreshWake();
     }, ITEMS_BACKGROUND_REFRESH_INTERVAL_MS);
 
     window.addEventListener('focus', handleItemsAutoRefreshWake);
@@ -13281,19 +14534,64 @@
     card.appendChild(imageDiv);
     card.appendChild(bodyDiv);
 
-    card.addEventListener('click', function() {
-      if (itemIsUnobtainable && !isItemFullyRanked(item)) {
-        openItemInfoModal(item);
-        return;
-      }
-      if (item.category === 'Mods') {
-        setItemRank(item, masteredSet.has(item.uniqueName) ? 0 : 1);
-      } else {
-        var maxRank = getItemMaxRank(item);
-        setItemRank(item, isItemFullyRanked(item) ? 0 : (maxRank > 0 ? maxRank : 1));
-      }
-      commitItemRankChange(card, item);
-    });
+card.addEventListener('auxclick', function(e) {
+        // Right click (button 2) toggles owned status
+        if (e.button === 2) {
+          e.preventDefault(); // prevent context menu
+
+          if (window.inventoryService) {
+            window.inventoryService.toggleOwnedItem(item.name);
+          } else {
+            // Directly manipulate localStorage for owned items (fallback if market.js hasn't loaded yet)
+            var ownedKey = 'warframe_inventory_owned_items';
+            var owned = new Set(JSON.parse(localStorage.getItem(ownedKey) || '[]'));
+            if (owned.has(item.name)) {
+              owned.delete(item.name);
+            } else {
+              owned.add(item.name);
+            }
+            localStorage.setItem(ownedKey, JSON.stringify(Array.from(owned)));
+          }
+
+          // Update UI: add/remove owned badge
+          var existingBadge = card.querySelector('.owned-badge');
+          if (existingBadge) {
+            existingBadge.remove();
+          }
+          // Check if we have access to the real inventoryService (either from window or from our direct manipulation)
+          var isOwned = false;
+          if (window.inventoryService) {
+            isOwned = window.inventoryService.isOwned(item.name);
+          } else {
+            // Fallback: check localStorage directly
+            var ownedKey = 'warframe_inventory_owned_items';
+            var owned = new Set(JSON.parse(localStorage.getItem(ownedKey) || '[]'));
+            isOwned = owned.has(item.name);
+          }
+          if (isOwned) {
+            var ownedBadge = document.createElement('div');
+            ownedBadge.className = 'owned-badge';
+            ownedBadge.title = 'Owned';
+            ownedBadge.innerHTML = '&check;';
+            imageDiv.appendChild(ownedBadge);
+          }
+          e.stopPropagation();
+          return;
+        }
+
+        // Left click (button 0) and other buttons: normal click behavior (toggle mastery/rank)
+        if (itemIsUnobtainable && !isItemFullyRanked(item)) {
+          openItemInfoModal(item);
+          return;
+        }
+        if (item.category === 'Mods') {
+          setItemRank(item, masteredSet.has(item.uniqueName) ? 0 : 1);
+        } else {
+          var maxRank = getItemMaxRank(item);
+          setItemRank(item, isItemFullyRanked(item) ? 0 : (maxRank > 0 ? maxRank : 1));
+        }
+        commitItemRankChange(card, item);
+      });
 
     updateItemCardProgress(card, item);
     return card;
@@ -13537,11 +14835,15 @@
   }
 
   async function openGitHubRepo() {
-    await openExternalUrl(REPO_URL);
+    await openExternalUrl(REPO_WEB_URL);
   }
 
-  async function openTelegramContact() {
-    await openExternalUrl(TELEGRAM_CONTACT_URL);
+  async function openIssueTracker() {
+    await openExternalUrl(ISSUES_URL);
+  }
+
+  async function openUpstreamRepo() {
+    await openExternalUrl(UPSTREAM_URL);
   }
 
   function setProfileSyncIndicator(state, text, title) {
@@ -14497,15 +15799,23 @@
     await setAlwaysOnTopEnabled(enabled);
   }
 
+  // The version is shown twice: in the settings footer and in the About card, which is
+  // the screen the licence names as a valid place for attribution.
+  function renderAppVersionLabels(version) {
+    var label = 'Version ' + (version || '-');
+    if (els.settingsAppVersion) els.settingsAppVersion.textContent = label;
+    if (els.settingsAboutVersion) els.settingsAboutVersion.textContent = version || '-';
+  }
+
   async function initAppVersion() {
-    if (!els.settingsAppVersion) return '';
+    if (!els.settingsAppVersion && !els.settingsAboutVersion) return '';
     var versionHint = '';
     if (window.electronAPI && typeof window.electronAPI.getVersionHint === 'function') {
       versionHint = String(window.electronAPI.getVersionHint() || '').trim();
     }
     if (!window.electronAPI || !window.electronAPI.getAppVersion) {
       currentAppVersion = versionHint;
-      els.settingsAppVersion.textContent = 'Version ' + (currentAppVersion || '-');
+      renderAppVersionLabels(currentAppVersion);
       return currentAppVersion;
     }
     try {
@@ -14514,11 +15824,11 @@
       if (!currentAppVersion && versionHint) {
         currentAppVersion = versionHint;
       }
-      els.settingsAppVersion.textContent = 'Version ' + (currentAppVersion || '-');
+      renderAppVersionLabels(currentAppVersion);
       return currentAppVersion;
     } catch (err) {
       currentAppVersion = versionHint;
-      els.settingsAppVersion.textContent = 'Version ' + (currentAppVersion || '-');
+      renderAppVersionLabels(currentAppVersion);
       return currentAppVersion;
     }
   }
@@ -14797,6 +16107,7 @@
     setUpdateStatus('is-checking', 'checking...', 'Checking GitHub for the latest version...');
 
     try {
+      recordUpdateCheckTime();
       var latestInfo = await fetchLatestVersionFromRepo();
       var latest = latestInfo.version;
       var comparison = compareVersionParts(current.parts, latest.parts);
@@ -14841,6 +16152,13 @@
   }
 
   async function checkForUpdates() {
+    // A fork can switch the whole update path off rather than having it silently
+    // query a repository it does not own.
+    if (!FORK.UPDATE_ENABLED) {
+      setUpdateStatus('is-idle', 'updates disabled', 'Update checking is disabled in this build.');
+      return;
+    }
+
     if (!window.electronAPI || !window.electronAPI.checkForAppUpdate) {
       await checkForUpdatesFromRepo();
       return;
@@ -14858,6 +16176,7 @@
 
     var result;
     try {
+      recordUpdateCheckTime();
       result = await window.electronAPI.checkForAppUpdate();
     } catch (err) {
       setMainMenuUpdateButtonState({
@@ -14958,8 +16277,20 @@
       els.autoUpdateCheckToggle.checked = enabled;
     }
 
-    if (enabled) {
-      checkForUpdates();
+    if (enabled && shouldRunStartupUpdateCheck()) {
+      setUpdateStatus('is-checking', 'checking...', 'Checking for updates...');
+      // Delay past first paint so the network round trip never competes with
+      // making the window feel responsive.
+      setTimeout(checkForUpdates, AUTO_UPDATE_STARTUP_DELAY_MS);
+    } else if (enabled) {
+      // Enabled, but already checked within the last day. Say so honestly rather
+      // than implying the feature is off.
+      setDownloadUpdateButtonVisible(false, true);
+      setUpdateStatus(
+        'is-up-to-date',
+        'last checked recently',
+        'Automatic checks run once a day. Use Check for Updates to check now.'
+      );
     } else {
       setDownloadUpdateButtonVisible(false, true);
       setMainMenuUpdateButtonState({
@@ -14971,6 +16302,25 @@
       });
       setUpdateStatus('is-error', 'status unavailable', 'Auto update check is disabled.');
     }
+  }
+
+  // Hitting GitHub on every single launch is exactly the "quietly phoning home"
+  // behaviour that makes an app feel like bloatware. A startup check runs at most
+  // once a day; the manual button always works regardless.
+  function shouldRunStartupUpdateCheck() {
+    try {
+      var last = Number(localStorage.getItem(AUTO_UPDATE_LAST_CHECK_KEY)) || 0;
+      if (!last) return true;
+      return (Date.now() - last) >= AUTO_UPDATE_CHECK_INTERVAL_MS;
+    } catch (e) {
+      return true;
+    }
+  }
+
+  function recordUpdateCheckTime() {
+    try {
+      localStorage.setItem(AUTO_UPDATE_LAST_CHECK_KEY, String(Date.now()));
+    } catch (e) { /* storage unavailable; the throttle just resets */ }
   }
 
   // ---------- Counts ----------
@@ -15085,30 +16435,16 @@
     applyFilters();
   }
 
-  function initSidebarAutoHide() {
-    if (!els.appContainer) return;
-    els.appContainer.classList.add('sidebar-collapsed', 'sidebar-auto-hide');
-  }
-
-  /** Remove focus from the sidebar so CSS :not(:focus-within) collapses it back to rail. */
-  function collapseSidebar() {
-    var sidebarEl = document.getElementById('sidebar');
-    if (!sidebarEl) return;
-    if (sidebarEl.contains(document.activeElement)) {
-      document.activeElement.blur();
-    }
-  }
-
   // ---------- Event Listeners ----------
 
-  // Sidebar navigation
+  // Equipment categories (the category rail)
   $$('.nav-item[data-category]').forEach(function(btn) {
     btn.addEventListener('click', function() {
-      $$('.nav-item[data-category]').forEach(function(b) { b.classList.remove('active'); });
-      btn.classList.add('active');
+      // Assign first: syncCategoryActive() reads currentCategory, so calling it
+      // before this re-applies the previous category's highlight.
       currentCategory = btn.dataset.category;
+      syncCategoryActive();
       applyFilters();
-      collapseSidebar();
     });
   });
 
@@ -15319,7 +16655,6 @@
   if (els.tradeModeBtn) {
     els.tradeModeBtn.addEventListener('click', function() {
       toggleTradeMode();
-      collapseSidebar();
     });
     updateTradeModeUI();
   }
@@ -15349,8 +16684,62 @@
     setRelicOverlayStatus('', 'Overlay disabled. Enable it before opening relics.');
   }
 
+  if (els.rivenOverlayToggle) {
+    els.rivenOverlayToggle.addEventListener('change', function() {
+      setRivenOverlayEnabled(!!els.rivenOverlayToggle.checked);
+    });
+    setRivenOverlayStatus('', 'Riven overlay disabled.');
+  }
+
+  // Populate display selector
+  if (els.rivenDisplaySelect && window.electronAPI && window.electronAPI.getAvailableDisplays) {
+    window.electronAPI.getAvailableDisplays().then(function(displays) {
+      if (!displays || !Array.isArray(displays)) return;
+
+      // Clear existing options except the first (Auto-detect)
+      while (els.rivenDisplaySelect.options.length > 1) {
+        els.rivenDisplaySelect.remove(1);
+      }
+
+      // Add display options
+      displays.forEach(function(display) {
+        var option = document.createElement('option');
+        option.value = display.id;
+        option.textContent = display.label;
+        els.rivenDisplaySelect.appendChild(option);
+      });
+
+      // Load saved preference
+      if (window.electronAPI.getRivenOverlayStatus) {
+        window.electronAPI.getRivenOverlayStatus().then(function(status) {
+          if (status && status.manualDisplayId) {
+            els.rivenDisplaySelect.value = status.manualDisplayId;
+          }
+        });
+      }
+    }).catch(function(err) {
+      console.error('Failed to load displays:', err);
+    });
+
+    // Handle selection change
+    els.rivenDisplaySelect.addEventListener('change', function() {
+      var selectedDisplayId = els.rivenDisplaySelect.value || null;
+      if (window.electronAPI && window.electronAPI.setRivenOverlayDisplay) {
+        window.electronAPI.setRivenOverlayDisplay(selectedDisplayId).then(function() {
+          console.log('Riven display preference saved:', selectedDisplayId || 'Auto');
+        }).catch(function(err) {
+          console.error('Failed to save display preference:', err);
+        });
+      }
+    });
+  }
+
   if (window.electronAPI && window.electronAPI.onRelicOverlayEvent) {
     window.electronAPI.onRelicOverlayEvent(handleRelicOverlayEvent);
+  }
+
+  if (window.electronAPI && window.electronAPI.onRivenScanResult) {
+    window.electronAPI.onRivenScanResult(handleRivenScanResult);
   }
 
   if (els.themeOptions && els.themeOptions.length) {
@@ -15419,9 +16808,15 @@
     });
   }
 
-  if (els.openTelegramContactBtn) {
-    els.openTelegramContactBtn.addEventListener('click', function() {
-      openTelegramContact();
+  if (els.openIssuesBtn) {
+    els.openIssuesBtn.addEventListener('click', function() {
+      openIssueTracker();
+    });
+  }
+
+  if (els.openUpstreamBtn) {
+    els.openUpstreamBtn.addEventListener('click', function() {
+      openUpstreamRepo();
     });
   }
 
@@ -15587,6 +16982,40 @@
 
   if (els.itemInfoClose) {
     els.itemInfoClose.addEventListener('click', closeItemInfoModal);
+  }
+  if (els.itemInfoVariants) {
+    els.itemInfoVariants.addEventListener('click', function (event) {
+      var target = event.target.closest ? event.target.closest('[data-item-info-open-unique]') : null;
+      if (!target) return;
+      var next = findItemByUniqueName(target.getAttribute('data-item-info-open-unique'));
+      // Swaps the window's contents in place instead of stacking another modal.
+      if (next) syncItemInfoModalContent(next, { preserveActiveTab: true, prefetchWiki: false });
+    });
+  }
+  if (els.itemInfoFarmList) {
+    els.itemInfoFarmList.addEventListener('click', function (event) {
+      var partTarget = event.target.closest ? event.target.closest('[data-part-market]') : null;
+      if (partTarget) {
+        openMarketForPart(partTarget.getAttribute('data-part-market'));
+        return;
+      }
+      var target = event.target.closest ? event.target.closest('[data-relic-open]') : null;
+      if (!target) return;
+      openRelicDirectoryForName(target.getAttribute('data-relic-open'));
+    });
+    els.itemInfoFarmList.addEventListener('keydown', function (event) {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      var partTarget = event.target.closest ? event.target.closest('[data-part-market]') : null;
+      if (partTarget) {
+        event.preventDefault();
+        openMarketForPart(partTarget.getAttribute('data-part-market'));
+        return;
+      }
+      var target = event.target.closest ? event.target.closest('[data-relic-open]') : null;
+      if (!target) return;
+      event.preventDefault();
+      openRelicDirectoryForName(target.getAttribute('data-relic-open'));
+    });
   }
   if (els.relicDetailClose) {
     els.relicDetailClose.addEventListener('click', closeRelicDetailModal);
@@ -15986,6 +17415,20 @@
       stopPrimeCountdown();
       stopCycleCountdown();
     }
+
+    // Every branch above clears `.nav-item[data-category].active` so the panel
+    // links can take the highlight, which left the equipment category with no
+    // highlight at all after any panel switch. Re-apply it from the single
+    // source of truth instead of relying on whichever button was last clicked.
+    syncCategoryActive();
+  }
+
+  /* Puts the `active` class back on the category button matching currentCategory.
+     Kept next to the click handler for the categories so the two stay in step. */
+  function syncCategoryActive() {
+    $$('.nav-item[data-category]').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.category === currentCategory);
+    });
   }
 
   async function animateOut(el) {
@@ -16013,6 +17456,13 @@
     var currentName = getCurrentPanelName();
     var currentEl = refs[currentName];
 
+    // Keep the dock strip's highlight in step with whatever route opened this
+    // panel. Panels are also opened from relic links, "Used By" jumps and the
+    // item modal, and the strip used to keep highlighting the previous panel.
+    if (window.OrdisDock && typeof window.OrdisDock.sync === 'function') {
+      window.OrdisDock.sync(panel);
+    }
+
     if (panelSwitchInProgress || !smooth || currentName === panel) {
       applyPanelVisibility(panel, refs);
       return;
@@ -16025,17 +17475,25 @@
     panelSwitchInProgress = false;
   }
 
-  // Market nav button
-  $('#nav-market').addEventListener('click', function() {
-    showPanel('market');
-    collapseSidebar();
-  });
+  // Exposed for dock.js. The dock decides *which* panel is focused, but panel
+  // switching, lazy loading and nav highlighting all stay here, so there is only
+  // one implementation of "show a panel" in the app.
+  window.showPanel = showPanel;
+
+  // Market nav button. Guarded because the panel links in the sidebar are
+  // redundant now that the dock owns panel switching, and this element may not
+  // be present.
+  var navMarketBtn = $('#nav-market');
+  if (navMarketBtn) {
+    navMarketBtn.addEventListener('click', function() {
+      showPanel('market');
+    });
+  }
 
   var navTradeAnalytics = $('#nav-trade-analytics');
   if (navTradeAnalytics) {
     navTradeAnalytics.addEventListener('click', function() {
       showPanel('analytics', true);
-      collapseSidebar();
       if (typeof window.requestAnimationFrame === 'function') {
         window.requestAnimationFrame(function() {
           var analyticsSearchInput = $('#trade-analytics-search-input');
@@ -16049,7 +17507,6 @@
   if (navPrimeResurgence) {
     navPrimeResurgence.addEventListener('click', function() {
       showPanel('prime', true);
-      collapseSidebar();
     });
   }
 
@@ -16057,7 +17514,6 @@
   if (navRelics) {
     navRelics.addEventListener('click', function() {
       showPanel('relics', true);
-      collapseSidebar();
       if (typeof window.requestAnimationFrame === 'function') {
         window.requestAnimationFrame(function() {
           if (els.relicSearchInput) els.relicSearchInput.focus();
@@ -16070,7 +17526,6 @@
   if (navArcanes) {
     navArcanes.addEventListener('click', function() {
       showPanel('arcanes', true);
-      collapseSidebar();
       if (typeof window.requestAnimationFrame === 'function') {
         window.requestAnimationFrame(function() {
           if (els.arcaneSearchInput) els.arcaneSearchInput.focus();
@@ -16083,7 +17538,6 @@
   if (navCycles) {
     navCycles.addEventListener('click', function() {
       showPanel('cycles', true);
-      collapseSidebar();
     });
   }
 
@@ -16091,7 +17545,6 @@
   if (navStarchartEl) {
     navStarchartEl.addEventListener('click', function() {
       showPanel('starchart', true);
-      collapseSidebar();
     });
   }
 
@@ -16099,7 +17552,6 @@
   if (navSquadFinder) {
     navSquadFinder.addEventListener('click', function() {
       showPanel('squad', true);
-      collapseSidebar();
     });
   }
 
@@ -16107,7 +17559,6 @@
   if (navCompareEl) {
     navCompareEl.addEventListener('click', function() {
       showPanel('compare', true);
-      collapseSidebar();
     });
   }
 
@@ -16115,7 +17566,6 @@
   if (navRecommendationsEl) {
     navRecommendationsEl.addEventListener('click', function() {
       showPanel('recommendations', true);
-      collapseSidebar();
       if (typeof window.requestAnimationFrame === 'function') {
         window.requestAnimationFrame(function() {
           if (els.recommendationSearchInput) els.recommendationSearchInput.focus();
@@ -16128,7 +17578,6 @@
   if (navResourceSearchEl) {
     navResourceSearchEl.addEventListener('click', function() {
       showPanel('resources', true);
-      collapseSidebar();
       if (typeof window.requestAnimationFrame === 'function') {
         window.requestAnimationFrame(function() {
           if (els.resourceSearchInput) els.resourceSearchInput.focus();
@@ -16392,18 +17841,17 @@
   $$('.nav-item[data-category]').forEach(function(btn) {
     btn.addEventListener('click', function() {
       showPanel('checklist');
-      collapseSidebar();
     });
   });
 
   // ---------- Init ----------
+  installResizeGlassGuard();
   initNativeUpdaterBridge();
   initThemeSetting();
   initAppVersion();
   initAlwaysOnTopSetting();
   initAutoUpdateSetting();
   initProfileFetchSetting();
-  initSidebarAutoHide();
   initRemovedProfileStorageMigration();
   // ---------- Frame Comparison ----------
   var compareInitialized = false;

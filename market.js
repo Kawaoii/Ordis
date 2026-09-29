@@ -7,7 +7,10 @@
 
   const MARKET_API = 'https://api.warframe.market/v2/items';
   const AUCTIONS_PAGE_URL = 'https://warframe.market/auctions';
-  const AUCTIONS_SEARCH_API = 'https://api.warframe.market/v1/auctions/search';
+  // Note: the v1 search endpoint cannot satisfy any filter combination (it answers
+  // requirements_not_met for type=riven/lich/sister, with or without the full
+  // legacy form), so contracts are read from the public /v1/auctions feed and
+  // filtered locally by wfm-contracts.js. See that file for the probe results.
   const ORDERS_API_V2 = 'https://api.warframe.market/v2/orders/item';
   const ORDERS_API_V1 = 'https://api.warframe.market/v1/items';
   const STATS_API_V1 = 'https://api.warframe.market/v1/items';
@@ -23,6 +26,9 @@
   const OVERLAY_PRICE_REQUEST_TIMEOUT_MS = 2500;
   const CONTRACT_RESULTS_BATCH_SIZE = 60;
   const CONTRACT_ANY_EPHEMERA_VALUE = '__any_ephemera__';
+  const RIVEN_WEAPONS_API = 'https://api.warframe.market/v2/riven/weapons';
+  const RIVEN_ATTRIBUTES_API = 'https://api.warframe.market/v2/riven/attributes';
+  const CONTRACT_FEED_API = 'https://api.warframe.market/v1/auctions';
   const PRIME_SET_PART_LIMIT = 10;
   const ANALYTICS_DEFAULT_PICK_NAMES = [
     'Arcane Energize',
@@ -35,33 +41,272 @@
     'Legendary Core'
   ];
 
-  let marketItems = [];
-  let filteredMarketItems = [];
-  let marketSearchQuery = '';
-  let marketCategory = 'all';
-  let currentOrdersSlug = null;
-  let currentOrdersItemName = null;
-  let currentOrdersWikiUrl = null;
-  let currentOrdersItemMeta = null;
-  let ordersOnlineOnly = false;
-  let ordersOnlineMode = 'all_online';
-  let ordersRefreshInterval = null;
-  let marketInitialized = false;
-  let marketViewMode = 'items';
-  let analyticsSearchQuery = '';
-  let analyticsSelectedSlug = '';
-  let analyticsCurrentItem = null;
-  let analyticsStatsCache = Object.create(null);
-  let analyticsOrdersCache = Object.create(null);
-  let overlayPriceCache = Object.create(null);
-  let overlayPriceRequests = Object.create(null);
-  let analyticsRequestToken = 0;
-  let contractsLookupData = null;
-  let contractsLookupPromise = null;
-  let contractsLookupError = '';
-  let contractsResults = [];
-  let contractsLoading = false;
-  let contractsError = '';
+let marketItems = [];
+let marketGroups = [];
+let filteredMarketItems = [];
+let marketSearchQuery = '';
+let marketCategory = 'all';
+let currentOrdersSlug = null;
+let currentOrdersItemName = null;
+let currentOrdersWikiUrl = null;
+let currentOrdersItemMeta = null;
+let currentOrdersSetGroup = null;
+// Bumped whenever the modal targets a different item, so a slow orders response for the
+// previous item cannot render under the new item's heading.
+let ordersOpenToken = 0;
+let ordersOnlineOnly = false;
+let ordersOnlineMode = 'all_online';
+let ordersRefreshInterval = null;
+let marketInitialized = false;
+let marketViewMode = 'items';
+let analyticsSearchQuery = '';
+let analyticsSelectedSlug = '';
+let analyticsCurrentItem = null;
+let analyticsStatsCache = Object.create(null);
+let analyticsOrdersCache = Object.create(null);
+let overlayPriceCache = Object.create(null);
+let overlayPriceRequests = Object.create(null);
+let analyticsRequestToken = 0;
+let contractsLookupData = null;
+let contractsLookupPromise = null;
+let contractsLookupError = '';
+let contractsResults = [];
+let contractsLoading = false;
+let contractsError = '';
+
+// Inventory service - tracks what the player owns
+let inventoryService = {
+   ownedItems: new Set(),      // Item names the player owns
+   masteredItems: new Set(),   // Item names the player has mastered
+   vaultedItems: new Set(),    // Item names that are currently vaulted
+   
+   // Load inventory from localStorage
+   load: function() {
+     try {
+       const owned = localStorage.getItem('warframe_inventory_owned_items');
+       if (owned) {
+         this.ownedItems = new Set(JSON.parse(owned));
+       }
+     } catch (e) {
+       console.error('Failed to load owned items from localStorage', e);
+     }
+     try {
+       const mastered = localStorage.getItem('warframe_inventory_mastered_items');
+       if (mastered) {
+         this.masteredItems = new Set(JSON.parse(mastered));
+       }
+     } catch (e) {
+       console.error('Failed to load mastered items from localStorage', e);
+     }
+     try {
+       const vaulted = localStorage.getItem('warframe_inventory_vaulted_items');
+       if (vaulted) {
+         this.vaultedItems = new Set(JSON.parse(vaulted));
+       }
+     } catch (e) {
+       console.error('Failed to load vaulted items from localStorage', e);
+     }
+   },
+   
+   // Save inventory to localStorage
+   save: function() {
+     try {
+       localStorage.setItem('warframe_inventory_owned_items', JSON.stringify(Array.from(this.ownedItems)));
+     } catch (e) {
+       console.error('Failed to save owned items to localStorage', e);
+     }
+     try {
+       localStorage.setItem('warframe_inventory_mastered_items', JSON.stringify(Array.from(this.masteredItems)));
+     } catch (e) {
+       console.error('Failed to save mastered items to localStorage', e);
+     }
+     try {
+       localStorage.setItem('warframe_inventory_vaulted_items', JSON.stringify(Array.from(this.vaultedItems)));
+     } catch (e) {
+       console.error('Failed to save vaulted items to localStorage', e);
+     }
+   },
+   
+   // Initialize with empty sets - in a real implementation this would be populated from game data
+   init: function() {
+     // Load from localStorage
+     this.load();
+     // Stub: In reality, this would fetch from game data via Overwolf or WFM API
+     // For now we'll leave empty - UI will show none owned
+     // this.ownedItems.clear();
+     // this.masteredItems.clear();
+     // this.vaultedItems.clear();
+   },
+   
+   // Check if item is owned
+   isOwned: function(itemName) {
+     return this.ownedItems.has(itemName);
+   },
+   
+   // Check if item is mastered
+   isMastered: function(itemName) {
+     return this.masteredItems.has(itemName);
+   },
+   
+   // Check if item is vaulted
+   isVaulted: function(itemName) {
+     return this.vaultedItems.has(itemName);
+   },
+   
+   // Add an owned item
+   addOwnedItem: function(itemName) {
+     this.ownedItems.add(itemName);
+     this.save();
+   },
+   
+   // Remove an owned item
+   removeOwnedItem: function(itemName) {
+     this.ownedItems.delete(itemName);
+     this.save();
+   },
+   
+   // Toggle owned status
+   toggleOwnedItem: function(itemName) {
+     if (this.ownedItems.has(itemName)) {
+       this.ownedItems.delete(itemName);
+     } else {
+       this.ownedItems.add(itemName);
+     }
+     this.save();
+   },
+   
+   // Add a mastered item
+   addMasteredItem: function(itemName) {
+     this.masteredItems.add(itemName);
+     this.save();
+   },
+   
+   // Remove a mastered item
+   removeMasteredItem: function(itemName) {
+     this.masteredItems.delete(itemName);
+     this.save();
+   },
+   
+   // Toggle mastered status
+   toggleMasteredItem: function(itemName) {
+     if (this.masteredItems.has(itemName)) {
+       this.masteredItems.delete(itemName);
+     } else {
+       this.masteredItems.add(itemName);
+     }
+     this.save();
+   },
+   
+   // Add a vaulted item
+   addVaultedItem: function(itemName) {
+     this.vaultedItems.add(itemName);
+     this.save();
+   },
+   
+   // Remove a vaulted item
+   removeVaultedItem: function(itemName) {
+     this.vaultedItems.delete(itemName);
+     this.save();
+   },
+   
+   // Toggle vaulted status
+   toggleVaultedItem: function(itemName) {
+     if (this.vaultedItems.has(itemName)) {
+       this.vaultedItems.delete(itemName);
+     } else {
+       this.vaultedItems.add(itemName);
+     }
+     this.save();
+   },
+   
+   // Get count of owned parts for a set
+   getOwnedPartCount: function(setGroup) {
+     if (!setGroup || !setGroup.parts) return 0;
+     let count = 0;
+     for (const part of setGroup.parts) {
+       if (this.ownedItems.has(part.name)) {
+         count++;
+       }
+     }
+     return count;
+   },
+   
+   // Get count of mastered parts for a set
+   getMasteredPartCount: function(setGroup) {
+     if (!setGroup || !setGroup.parts) return 0;
+     let count = 0;
+     for (const part of setGroup.parts) {
+       if (this.masteredItems.has(part.name)) {
+         count++;
+       }
+     }
+     return count;
+   },
+   
+   // Get count of vaulted parts for a set
+   getVaultedPartCount: function(setGroup) {
+     if (!setGroup || !setGroup.parts) return 0;
+     let count = 0;
+     for (const part of setGroup.parts) {
+       if (this.vaultedItems.has(part.name)) {
+         count++;
+       }
+     }
+     return count;
+   }
+ };
+
+// Initialize inventory service
+inventoryService.init();
+
+// Expose globally for use in other modules (e.g., renderer.js)
+window.inventoryService = inventoryService;
+
+// Market inventory filter state
+const MARKET_FILTER_STATE_KEY = 'market-inventory-filter-state';
+
+let showOwnedOnly = false;
+let showNotOwnedOnly = false;
+let showVaultedOnly = false;
+let showActiveOnly = false;
+// Declared because applyMarketFilters() reads it. It was referenced but never
+// defined, so the ReferenceError aborted every market load: the filter pass
+// threw inside loadMarketItems()'s try block, which reported the failure as
+// "Failed to fetch market items" even though the fetch had succeeded, and no
+// items were ever rendered.
+let showMasteredOnly = false;
+
+// Load filter state from localStorage
+(function loadMarketFilterState() {
+  try {
+    var raw = localStorage.getItem(MARKET_FILTER_STATE_KEY);
+    if (!raw) return;
+    var state = JSON.parse(raw);
+    if (typeof state.showOwnedOnly === 'boolean') showOwnedOnly = state.showOwnedOnly;
+    if (typeof state.showNotOwnedOnly === 'boolean') showNotOwnedOnly = state.showNotOwnedOnly;
+    if (typeof state.showVaultedOnly === 'boolean') showVaultedOnly = state.showVaultedOnly;
+    if (typeof state.showActiveOnly === 'boolean') showActiveOnly = state.showActiveOnly;
+  } catch (e) {
+    /* ignore corrupt state */
+  }
+})();
+
+// Save filter state to localStorage
+function saveMarketFilterState() {
+  try {
+    localStorage.setItem(MARKET_FILTER_STATE_KEY, JSON.stringify({
+      showOwnedOnly: showOwnedOnly,
+      showNotOwnedOnly: showNotOwnedOnly,
+      showVaultedOnly: showVaultedOnly,
+      showActiveOnly: showActiveOnly
+    }));
+  } catch (e) {
+    /* quota exceeded */
+  }
+}
+  // How far back the last local feed walk actually went, so the results can say so
+  // rather than implying an empty result means no listings exist.
+  let contractsCoverageNote = '';
   let contractsHasSearched = false;
   let contractsRequestToken = 0;
   let contractsVisibleCount = CONTRACT_RESULTS_BATCH_SIZE;
@@ -186,7 +431,7 @@
       .replace(/^\/+/, '')
       .split(/[_-]+/)
       .filter(Boolean)
-      .map(function(part) { return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase(); })
+      .map(function (part) { return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase(); })
       .join(' ');
   }
 
@@ -194,6 +439,448 @@
     if (!path) return '';
     if (/^https?:\/\//i.test(path)) return path;
     return CDN_BASE + String(path).replace(/^\/+/, '');
+  }
+
+  // Warframe Market serves item art from CDN_BASE, which sits behind the same
+  // Cloudflare protection as the login flow and answers 403 for direct requests, so
+  // every market thumbnail was rendering broken. The app's own item catalogue already
+  // carries working art for most tradable items, so prefer that and keep the WFM URL
+  // only as a last resort for items the catalogue does not know.
+// Warframe Market splits a weapon into parts that have no catalogue or wiki page of
+   // their own ("Acceltra Prime Barrel"), but the parent weapon is always present.
+   // Try known part suffixes and the Set case to find the parent weapon art.
+   function resolveLocalCatalogImage(name) {
+     var bridge = window.warframeItemImageBridge;
+     if (!bridge || typeof bridge.getImageUrlByName !== 'function') return null;
+     var trimmed = String(name || '').trim();
+     if (!trimmed) return null;
+
+     // Known part suffixes that we can strip to find the parent weapon
+     var knownSuffixes = [
+       'Blueprint', 'Barrel', 'Receiver', 'Stock', 'Blade', 'Hilt', 'Guard', 'Motor',
+       'Harness', 'Systems', 'Wings', 'Engines', 'Fuselage', 'Clip', 'Magazine', 'Trigger',
+       'Stringer', 'Housing', 'Head', 'Frame', 'Chassis', 'Pylon', 'Optic', 'Scope', 'Muzzle',
+       'Tip', 'Imprint', 'Core'
+     ];
+
+     var candidates = [];
+
+     // 1. Try the exact name first (for non-part items that exist in the catalog)
+     candidates.push({name: trimmed, isSameItem: true});
+
+     // 2. If it ends with " Set", try the base (the set is the whole weapon)
+     var setMatch = trimmed.match(/^(.+?)\s+Set$/i);
+     if (setMatch) {
+       candidates.push({name: setMatch[1], isSameItem: true});
+     }
+
+     // 3. Try stripping each known part suffix (case-insensitive)
+     for (var i = 0; i < knownSuffixes.length; i++) {
+       var suffix = knownSuffixes[i];
+       if (trimmed.toLowerCase().endsWith(' ' + suffix.toLowerCase())) {
+         var base = trimmed.substring(0, trimmed.length - suffix.length - 1).trim();
+         if (base) {
+           candidates.push({name: base, isSameItem: false});
+         }
+       }
+     }
+
+     // Try each candidate in order until we find a valid image URL
+     for (var j = 0; j < candidates.length; j++) {
+       var candidate = candidates[j];
+       if (!candidate.name) continue;
+       var url = '';
+       try {
+         url = bridge.getImageUrlByName(candidate.name) || '';
+       } catch (err) {
+         url = '';
+       }
+       if (url) {
+         return { url: url, matchedName: candidate.name, isSameItem: candidate.isSameItem };
+       }
+     }
+
+     return null;
+   }
+
+  function getLocalCatalogImageUrl(name) {
+    var resolved = resolveLocalCatalogImage(name);
+    return resolved ? resolved.url : '';
+  }
+
+// Second tier: the official wiki. The local catalogue has no entry for WFM-only
+   // things such as mod effect names ("Primary Dexterity") or weapon parts
+   // ("Acceltra Prime Barrel"), and WFM's own art is unreachable when Cloudflare
+   // challenges the request, so the wiki fills the gap. Lookups are cached (including
+   // misses) and batched, since a market page can hold hundreds of items.
+   const WIKI_API = 'https://wiki.warframe.com/api.php';
+   const WIKI_IMAGE_CACHE_KEY = 'wfm_wiki_image_cache_v2'; // v2 to clear stale misses
+   const WIKI_BATCH_SIZE = 10;
+   let wikiImageCache = null;
+   let wikiQueue = [];
+   let wikiBusy = false;
+   let wikiRetries = 0;
+
+  function loadWikiImageCache() {
+    if (wikiImageCache) return wikiImageCache;
+    try {
+      wikiImageCache = JSON.parse(localStorage.getItem(WIKI_IMAGE_CACHE_KEY) || '{}') || {};
+    } catch (err) {
+      wikiImageCache = {};
+    }
+    return wikiImageCache;
+  }
+
+  function saveWikiImageCache() {
+    try {
+      localStorage.setItem(WIKI_IMAGE_CACHE_KEY, JSON.stringify(loadWikiImageCache()));
+    } catch (err) {
+      // A full or unavailable storage just means the cache is rebuilt next time.
+    }
+  }
+
+  // The wiki hosts no weapon-specific part art (Acceltra Prime Barrel is an empty stub,
+  // and File:AcceltraPrimeBarrel.png does not exist), but it does host generic part
+  // silhouettes that are shared by every weapon. Pairing one of those with the parent
+  // weapon's art tells you both which weapon and which part, which is the most a
+  // trading grid can honestly show without WFM's blocked asset host.
+  const MARKET_PART_ICON_FILES = {
+    barrel: { prime: 'GenericGunPrimeBarrel.png', base: 'GenericGunBarrel.png' },
+    receiver: { prime: 'GenericGunPrimeReceiver.png', base: 'GenericGunReceiver.png' },
+    stock: { prime: 'GenericGunPrimeStock.png', base: 'GenericGunStock.png' },
+    blade: { prime: 'GenericWeaponPrimeBlade.png', base: 'GenericWeaponBlade.png' },
+    hilt: { prime: 'GenericWeaponPrimeHilt.png', base: 'GenericWeaponHilt.png' },
+    guard: { prime: 'GenericWeaponPrimeGuard.png', base: 'GenericWeaponPrimeGuard.png' },
+    motor: { prime: 'GenericWeaponMotor.png', base: 'GenericWeaponMotor.png' },
+    harness: { prime: 'GenericArchwingHarnessPrime.png', base: 'GenericArchwingHarness.png' },
+    systems: { prime: 'GenericArchwingSystemsPrime.png', base: 'GenericArchwingSystems.png' },
+    wings: { prime: 'GenericArchwingWingsPrime.png', base: 'GenericArchwingWings.png' },
+    engines: { prime: 'GenericLandingCraftEngines.png', base: 'GenericLandingCraftEngines.png' },
+    fuselage: { prime: 'GenericLandingCraftFuselage.png', base: 'GenericLandingCraftFuselage.png' }
+  };
+  const PART_ICON_CACHE_KEY = 'wfm_wiki_part_icon_cache_v1';
+  let partIconCache = null;
+  let partIconPending = {};
+  let partIconFlushTimer = null;
+
+  function loadPartIconCache() {
+    if (partIconCache) return partIconCache;
+    try {
+      partIconCache = JSON.parse(localStorage.getItem(PART_ICON_CACHE_KEY) || '{}') || {};
+    } catch (err) {
+      partIconCache = {};
+    }
+    return partIconCache;
+  }
+
+  function savePartIconCache() {
+    try {
+      localStorage.setItem(PART_ICON_CACHE_KEY, JSON.stringify(loadPartIconCache()));
+    } catch (err) {
+      // Non-fatal: the next render just re-asks the wiki.
+    }
+  }
+
+  function getMarketPartIconTitle(name) {
+    var trimmed = String(name || '').trim();
+    var words = trimmed.split(/\s+/);
+    if (words.length < 2) return '';
+    var entry = MARKET_PART_ICON_FILES[words[words.length - 1].toLowerCase()];
+    if (!entry) return '';
+    return 'File:' + (/\bprime\b/i.test(trimmed) ? entry.prime : entry.base);
+  }
+
+  // Every card asks for its icon while the grid is being built, so collect them all and
+  // resolve in a single API call. Thirteen distinct files, once, then served from cache.
+  function requestMarketPartIcon(img, title) {
+    var cached = loadPartIconCache()[title];
+    if (cached) { img.src = cached; return; }
+    if (!partIconPending[title]) partIconPending[title] = [];
+    partIconPending[title].push(img);
+    if (!partIconFlushTimer) partIconFlushTimer = setTimeout(flushMarketPartIcons, 0);
+  }
+
+  function flushMarketPartIcons() {
+    partIconFlushTimer = null;
+    var titles = Object.keys(partIconPending);
+    if (!titles.length) return;
+    var waiting = partIconPending;
+    partIconPending = {};
+
+    var dropAll = function () {
+      for (var t = 0; t < titles.length; t++) {
+        var els = waiting[titles[t]] || [];
+        for (var e = 0; e < els.length; e++) if (els[e] && els[e].parentNode) els[e].parentNode.removeChild(els[e]);
+      }
+    };
+
+    var url = WIKI_API + '?action=query&redirects=1&prop=imageinfo&iiprop=url&format=json&origin=*&titles=' +
+      encodeURIComponent(titles.join('|'));
+
+    fetch(url)
+      .then(function (resp) {
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        return resp.json();
+      })
+      .then(function (json) {
+        var byTitle = {};
+        var pages = (json && json.query && json.query.pages) ? json.query.pages : {};
+        for (var key in pages) {
+          if (!Object.prototype.hasOwnProperty.call(pages, key)) continue;
+          var page = pages[key];
+          if (page && page.title) byTitle[String(page.title).toLowerCase()] = page;
+        }
+        var store = loadPartIconCache();
+        for (var t = 0; t < titles.length; t++) {
+          var wanted = titles[t];
+          var found = byTitle[String(wanted).toLowerCase()];
+          var src = (found && found.imageinfo && found.imageinfo[0] && found.imageinfo[0].url) || '';
+          store[wanted] = src;
+          var els = waiting[wanted] || [];
+          for (var e = 0; e < els.length; e++) {
+            if (!src) {
+              if (els[e] && els[e].parentNode) els[e].parentNode.removeChild(els[e]);
+            } else {
+              els[e].src = src;
+            }
+          }
+        }
+        savePartIconCache();
+      })
+      .catch(dropAll);
+  }
+
+  // WFM's "X Set" is the complete weapon, but the wiki article is filed under the
+  // base name, and parts ("X Barrel Blueprint") likewise resolve under the parent
+  // weapon, so offer progressively shorter prefixes as fallbacks.
+  function getWikiNameVariants(name) {
+    var trimmed = String(name || '').trim();
+    if (!trimmed) return [];
+
+    var words = trimmed.split(/\s+/);
+    var maxStrips = Math.min(2, Math.max(0, words.length - 1));
+    var variants = [];
+    for (var strip = 0; strip <= maxStrips; strip++) {
+      var candidate = words.slice(0, words.length - strip).join(' ').trim();
+      if (candidate && variants.indexOf(candidate) === -1) variants.push(candidate);
+    }
+    return variants;
+  }
+
+  function lookupWikiImageUrl(name, callback) {
+    var variants = getWikiNameVariants(name);
+    if (!variants.length) { callback(''); return; }
+
+    var cache = loadWikiImageCache();
+    for (var i = 0; i < variants.length; i++) {
+      var cached = cache[variants[i]];
+      if (cached) { callback(cached); return; }
+    }
+
+    enqueueWikiLookup(variants, callback);
+  }
+
+  function enqueueWikiLookup(variants, callback) {
+    wikiQueue.push({ variants: variants, callback: callback });
+    pumpWikiQueue();
+  }
+
+  // Lookups run one at a time with a short gap. A market page can queue hundreds of
+  // names, and firing them all at once made the wiki rate-limit us; the failures were
+  // swallowed, so those items silently kept no image.
+  function pumpWikiQueue() {
+    if (wikiBusy || !wikiQueue.length) return;
+    wikiBusy = true;
+
+    var entry = wikiQueue.shift();
+    var cache = loadWikiImageCache();
+    var hit = '';
+    var wanted = [];
+    for (var i = 0; i < entry.variants.length; i++) {
+      var key = entry.variants[i];
+      if (Object.prototype.hasOwnProperty.call(cache, key)) {
+        if (cache[key]) hit = cache[key];
+      } else {
+        wanted.push(key);
+      }
+    }
+
+    if (hit || !wanted.length) {
+      entry.callback(hit);
+      wikiBusy = false;
+      pumpWikiQueue();
+      return;
+    }
+
+    var titles = wanted.slice(0, WIKI_BATCH_SIZE);
+    var url = WIKI_API + '?action=query&redirects=1&prop=pageimages&piprop=original&format=json&origin=*&titles=' +
+      encodeURIComponent(titles.join('|'));
+
+    fetch(url)
+      .then(function (resp) {
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        return resp.json();
+      })
+      .then(function (json) {
+        var byTitle = {};
+        var pages = (json && json.query && json.query.pages) ? json.query.pages : {};
+        for (var key in pages) {
+          if (!Object.prototype.hasOwnProperty.call(pages, key)) continue;
+          var page = pages[key];
+          if (page && page.title) byTitle[String(page.title).toLowerCase()] = page;
+        }
+        var store = loadWikiImageCache();
+        for (var t = 0; t < titles.length; t++) {
+          var found = byTitle[String(titles[t]).toLowerCase()];
+          store[titles[t]] = (found && found.original && found.original.source) || '';
+        }
+        saveWikiImageCache();
+        wikiRetries = 0;
+
+        var result = '';
+        for (var v = 0; v < entry.variants.length; v++) {
+          if (store[entry.variants[v]]) { result = store[entry.variants[v]]; break; }
+        }
+        entry.callback(result);
+      })
+      .catch(function () {
+        // A failed request must not be cached as "no image", or the item would be
+        // stuck without art forever. Retry a couple of times, then give up quietly.
+        if (wikiRetries < 2) {
+          wikiRetries++;
+          wikiQueue.unshift(entry);
+        } else {
+          wikiRetries = 0;
+          entry.callback('');
+        }
+      })
+      .then(function () {
+        wikiBusy = false;
+        setTimeout(pumpWikiQueue, 120);
+      });
+  }
+
+  // Resolve wiki art for a short, known list up front so the caller can render once
+  // with final URLs instead of patching images in afterwards.
+  function resolveWikiImagesForNames(names) {
+    return new Promise(function (resolve) {
+      var out = {};
+      var pending = [];
+      for (var i = 0; i < (names || []).length; i++) {
+        var name = names[i];
+        if (name && !getLocalCatalogImageUrl(name)) pending.push(name);
+      }
+      if (!pending.length) { resolve(out); return; }
+
+      var left = pending.length;
+      for (var j = 0; j < pending.length; j++) {
+        (function (target) {
+          lookupWikiImageUrl(target, function (url) {
+            if (url) out[target] = url;
+            left--;
+            if (left === 0) resolve(out);
+          });
+        })(pending[j]);
+      }
+    });
+  }
+
+  // Point an already-rendered <img> at a wiki image once one is found. Items that
+  // resolve locally never reach this, so it only fires for catalogue misses.
+  function upgradeMarketImageFromWiki(img, name) {
+    if (!img || !name) return;
+    lookupWikiImageUrl(name, function (url) {
+      if (!url) return;
+      if (!img.isConnected) return;
+      if (img.getAttribute('data-wiki-upgraded') === '1') return;
+      img.setAttribute('data-wiki-upgraded', '1');
+      img.style.display = '';
+      img.src = url;
+    });
+  }
+
+  function getMarketItemImageUrl(item, path) {
+    var resolved = resolveLocalCatalogImage(item && item.name);
+    if (resolved) return resolved.url;
+    var source = (path === undefined || path === null) ? getMarketDisplayImage(item) : path;
+    return getMarketImageUrl(source);
+  }
+
+  // Every reachable art source for a trading part is the parent weapon's picture, so five
+  // cards would otherwise show the same thumbnail. Stamp the part they belong to on the
+  // corner instead of downloading per-part art that no reachable host will serve.
+  var MARKET_PART_BADGES = {
+    blueprint: 'BP',
+    barrel: 'BRL',
+    receiver: 'RCV',
+    stock: 'STK',
+    blade: 'BLD',
+    imprint: 'IMP',
+    core: 'CORE',
+    handle: 'HND',
+    hilt: 'HLT',
+    guard: 'GRD',
+    grip: 'GRP',
+    clip: 'CLP',
+    magazine: 'MAG',
+    trigger: 'TRG',
+    stringer: 'STR',
+    housing: 'HSG',
+    head: 'HEAD',
+    frame: 'FRM',
+    chassis: 'CHS',
+    pylon: 'PYL',
+    optic: 'OPT',
+    scope: 'SCP',
+    muzzle: 'MUZ',
+    tip: 'TIP'
+  };
+
+  function getMarketPartBadge(name) {
+    var trimmed = String(name || '').trim();
+    if (!trimmed) return '';
+    var words = trimmed.split(/\s+/);
+    if (words.length < 2) return '';
+    var last = words[words.length - 1].toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!last) return '';
+    if (MARKET_PART_BADGES[last]) return MARKET_PART_BADGES[last];
+    // Never collapse to a generic label: two different parts of the same weapon must not
+    // render the same badge, or they look identical again.
+    return last.slice(0, 3).toUpperCase();
+  }
+
+  // When the art belongs to the parent item rather than the exact part, say so in the
+  // tooltip and mark the thumbnail. On a trading screen a Barrel icon that is really the
+  // whole rifle should not pass unlabelled, and a grid of identical thumbnails is
+  // unreadable.
+  function labelMarketImageFallback(img, item, wrap) {
+    if (!img || !item || !item.name) return;
+    var resolved = resolveLocalCatalogImage(item.name);
+    if (!resolved || resolved.isSameItem) return;
+    if (resolved.matchedName === item.name) return;
+
+    img.title = 'Showing artwork for "' + resolved.matchedName + '"';
+    var target = wrap || (img.parentElement && img.parentElement.classList.contains('market-item-thumb') ? img.parentElement : null);
+    if (!target || target.querySelector('.mi-part-badge')) return;
+
+    var partLabel = item.name.split(/\s+/).pop();
+    var badge = document.createElement('span');
+    badge.className = 'mi-part-badge';
+    var iconTitle = getMarketPartIconTitle(item.name);
+    if (iconTitle) {
+      // Real part silhouette from the wiki; the parent weapon stays as the main art.
+      var icon = document.createElement('img');
+      icon.className = 'mi-part-icon';
+      icon.alt = '';
+      icon.title = 'This listing is the ' + partLabel + ' of "' + resolved.matchedName + '".';
+      requestMarketPartIcon(icon, iconTitle);
+      badge.appendChild(icon);
+    } else {
+      badge.textContent = getMarketPartBadge(item.name) || 'PART';
+    }
+    badge.title = 'Artwork is the whole "' + resolved.matchedName + '". This listing is for the ' +
+      partLabel + '.';
+    target.appendChild(badge);
   }
 
   function getMarketDisplayImage(item) {
@@ -239,7 +926,7 @@
     out.push(base + ' blueprint');
     out.push(base + ' set');
 
-    return out.filter(function(candidate, index, list) {
+    return out.filter(function (candidate, index, list) {
       return !!candidate && list.indexOf(candidate) === index;
     });
   }
@@ -466,7 +1153,7 @@
       if (parts.length >= PRIME_SET_PART_LIMIT) break;
     }
 
-    return parts.sort(function(a, b) { return a.name.localeCompare(b.name); });
+    return parts.sort(function (a, b) { return a.name.localeCompare(b.name); });
   }
 
   function getFairValue(model) {
@@ -602,20 +1289,20 @@
   }
 
   function withOverlayPriceTimeout(promise) {
-    return new Promise(function(resolve, reject) {
+    return new Promise(function (resolve, reject) {
       var settled = false;
-      var timer = setTimeout(function() {
+      var timer = setTimeout(function () {
         if (settled) return;
         settled = true;
         reject(new Error('Overlay price request timed out'));
       }, OVERLAY_PRICE_REQUEST_TIMEOUT_MS);
 
-      promise.then(function(value) {
+      promise.then(function (value) {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         resolve(value);
-      }).catch(function(err) {
+      }).catch(function (err) {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -651,14 +1338,14 @@
     var pool = online.length > 0 ? online : candidates;
     if (pool.length === 0) return null;
 
-    pool.sort(function(a, b) {
+    pool.sort(function (a, b) {
       var pa = getOrderPlatNumber(a) || 0;
       var pb = getOrderPlatNumber(b) || 0;
       if (pa !== pb) return orderType === 'sell' ? pa - pb : pb - pa;
       return getStatusSortRank(a) - getStatusSortRank(b);
     });
 
-    var prices = pool.map(getOrderPlatNumber).filter(function(price) {
+    var prices = pool.map(getOrderPlatNumber).filter(function (price) {
       return Number.isFinite(price) && price > 0;
     });
     if (prices.length === 0) return null;
@@ -675,7 +1362,7 @@
       }
     }
 
-    var sorted = sample.slice().sort(function(a, b) {
+    var sorted = sample.slice().sort(function (a, b) {
       return a - b;
     });
     var price = sorted[Math.floor(sorted.length / 2)];
@@ -779,17 +1466,17 @@
     }
 
     if (overlayPriceRequests[cacheKey]) {
-      return overlayPriceRequests[cacheKey].then(function(data) {
+      return overlayPriceRequests[cacheKey].then(function (data) {
         return Object.assign({ input: name }, data);
       });
     }
 
-    overlayPriceRequests[cacheKey] = (async function() {
+    overlayPriceRequests[cacheKey] = (async function () {
       var data = null;
-      var livePricePromise = getOverlayLivePriceData(item).catch(function() {
+      var livePricePromise = getOverlayLivePriceData(item).catch(function () {
         return null;
       });
-      var statsPricePromise = getOverlayStatsPriceData(item).catch(function() {
+      var statsPricePromise = getOverlayStatsPriceData(item).catch(function () {
         return null;
       });
 
@@ -818,18 +1505,18 @@
 
       cacheOverlayPrice(cacheKey, data);
       return data;
-    })().finally(function() {
+    })().finally(function () {
       delete overlayPriceRequests[cacheKey];
     });
 
-    return overlayPriceRequests[cacheKey].then(function(data) {
+    return overlayPriceRequests[cacheKey].then(function (data) {
       return Object.assign({ input: name }, data);
     });
   }
 
   async function getRelicRewardOverlayPrices(names) {
     var list = Array.isArray(names) ? names : [];
-    return Promise.all(list.map(async function(rawName) {
+    return Promise.all(list.map(async function (rawName) {
       var name = String(rawName || '').trim();
       if (!name) return null;
       try {
@@ -843,7 +1530,7 @@
           message: err && err.message ? err.message : 'Price unavailable.'
         };
       }
-    })).then(function(results) {
+    })).then(function (results) {
       return results.filter(Boolean);
     });
   }
@@ -908,7 +1595,7 @@
       buckets[key].count++;
     }
 
-    return Object.keys(buckets).map(function(key) {
+    return Object.keys(buckets).map(function (key) {
       var bucket = buckets[key];
       return {
         key: Number(bucket.key),
@@ -916,7 +1603,7 @@
         volume: bucket.volume,
         count: bucket.count
       };
-    }).filter(function(bucket) {
+    }).filter(function (bucket) {
       return isFinite(bucket.average) && bucket.count > 0;
     });
   }
@@ -925,7 +1612,7 @@
     var buckets = buildPriceBuckets(entries, options);
     if (!buckets.length) return null;
     var prefer = options && options.prefer === 'high' ? 'high' : 'low';
-    buckets.sort(function(a, b) {
+    buckets.sort(function (a, b) {
       if (prefer === 'high') return b.average - a.average;
       return a.average - b.average;
     });
@@ -1087,7 +1774,7 @@
     if (!query) return getAnalyticsQuickPickItems();
 
     return marketItems
-      .map(function(item) {
+      .map(function (item) {
         var normalized = normalizeMarketName(item.name);
         var index = normalized.indexOf(query);
         return {
@@ -1096,14 +1783,14 @@
           normalized: normalized
         };
       })
-      .filter(function(entry) { return entry.score !== Number.MAX_SAFE_INTEGER; })
-      .sort(function(a, b) {
+      .filter(function (entry) { return entry.score !== Number.MAX_SAFE_INTEGER; })
+      .sort(function (a, b) {
         if (a.score !== b.score) return a.score - b.score;
         if (a.normalized.length !== b.normalized.length) return a.normalized.length - b.normalized.length;
         return a.item.name.localeCompare(b.item.name);
       })
       .slice(0, 12)
-      .map(function(entry) { return entry.item; });
+      .map(function (entry) { return entry.item; });
   }
 
   function createAnalyticsPlaceholder(text) {
@@ -1206,6 +1893,127 @@
     };
   }
 
+  function contractsApiHeaders() {
+    return { Platform: 'pc', Language: 'en' };
+  }
+
+  async function fetchContractsJson(url) {
+    var resp = await fetch(url, { headers: contractsApiHeaders() });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status + ' from ' + url.replace('https://api.warframe.market', ''));
+    return resp.json();
+  }
+
+  /**
+   * Riven weapons come from the public v2 endpoint.
+   *
+   * The previous bootstrap scraped the warframe.market website HTML for an
+   * embedded `application-state` script. That is Cloudflare-protected and answers
+   * HTTP 403 to a plain fetch, so `contractsLookupError` was always set and
+   * renderContractsView() bailed out before rendering a single filter - the tab
+   * was unusable even though the actual contract data path worked fine.
+   */
+  async function fetchRivenWeaponsLookup() {
+    var json = await fetchContractsJson(RIVEN_WEAPONS_API);
+    var list = Array.isArray(json && json.data) ? json.data : [];
+    return list.map(function (entry) {
+      var en = entry && entry.i18n && entry.i18n.en ? entry.i18n.en : {};
+      return {
+        name: en.name || entry.name || safeNameFromSlug(entry.slug || ''),
+        urlName: entry.slug || entry.url_name || '',
+        icon: en.icon || entry.icon || '',
+        thumb: en.thumb || en.thumb || entry.thumb || '',
+        rivenType: entry.riven_type || '',
+        group: entry.group || '',
+        masteryLevel: typeof entry.mastery_level === 'number' ? entry.mastery_level : 0
+      };
+    }).filter(function (entry) { return !!entry.urlName; });
+  }
+
+  /**
+   * Riven attributes from the public v2 endpoint (32 entries, verified).
+   *
+   * The endpoint carries no polarity flag, so positive/negative are left false
+   * and every attribute is offered in both dropdowns. That is deliberate: the
+   * real check happens in wfm-contracts.js against the live order's attributes,
+   * so a stat that can never appear as a bonus simply matches nothing. Hiding
+   * options from a hardcoded list would have been the guessier failure.
+   */
+  async function fetchRivenAttributesLookup() {
+    var json = await fetchContractsJson(RIVEN_ATTRIBUTES_API);
+    var list = Array.isArray(json && json.data) ? json.data : [];
+    return list.map(function (entry) {
+      var en = entry && entry.i18n && entry.i18n.en ? entry.i18n.en : {};
+      return {
+        name: en.name || entry.name || safeNameFromSlug(entry.slug || ''),
+        urlName: entry.slug || entry.url_name || '',
+        units: entry.unit || '',
+        exclusiveTo: [],
+        positiveOnly: false,
+        negativeOnly: false,
+        searchOnly: false
+      };
+    }).filter(function (entry) { return !!entry.urlName; });
+  }
+
+  /**
+   * Lich and Sister filter options, derived from the live contracts feed.
+   *
+   * There is no public endpoint for these lists (/v2/lich and /v2/sister are
+   * 404, /v1/items?type=lich is 403), and the feed is dominated by rivens: page 1
+   * held 99 riven and 1 lich order. So the weapon list is only what recent pages
+   * have actually shown. The UI labels it as such and keeps free-text search as
+   * the reliable route, rather than implying the list is complete.
+   *
+   * The feed exposes `having_ephemera` as a boolean and no ephemera name, which
+   * is why there is no per-ephemera dropdown for these types.
+   */
+  async function fetchContractFeedLookups() {
+    var weapons = { lich: [], sister: [] };
+    var elements = [];
+    var seenWeapon = { lich: {}, sister: {} };
+    var seenElement = {};
+
+    for (var page = 1; page <= 4; page++) {
+      var json;
+      try {
+        json = await fetchContractsJson(CONTRACT_FEED_API + '?page=' + page);
+      } catch (err) {
+        // A partial walk still beats none; the first page is the valuable one.
+        break;
+      }
+      var orders = json && json.payload && Array.isArray(json.payload.auctions) ? json.payload.auctions : [];
+      if (orders.length === 0) break;
+
+      for (var i = 0; i < orders.length; i++) {
+        var item = (orders[i] && orders[i].item) || {};
+        if (item.type !== 'lich' && item.type !== 'sister') continue;
+
+        var urlName = item.weapon_url_name || '';
+        if (urlName && !seenWeapon[item.type][urlName]) {
+          seenWeapon[item.type][urlName] = true;
+          weapons[item.type].push({
+            name: safeNameFromSlug(urlName),
+            urlName: urlName,
+            icon: '',
+            thumb: ''
+          });
+        }
+
+        var element = String(item.element || '').trim();
+        if (element && !seenElement[element]) {
+          seenElement[element] = true;
+          elements.push(element);
+        }
+      }
+    }
+
+    return {
+      lichWeapons: sortLookupList(weapons.lich, 'name'),
+      sisterWeapons: sortLookupList(weapons.sister, 'name'),
+      elements: elements.sort()
+    };
+  }
+
   async function ensureContractsLookupData() {
     if (contractsLookupData) return contractsLookupData;
     if (contractsLookupPromise) return contractsLookupPromise;
@@ -1217,19 +2025,22 @@
       return contractsLookupData;
     }
 
-    contractsLookupPromise = fetch(AUCTIONS_PAGE_URL, {
-      headers: {
-        Platform: 'pc',
-        Language: 'en'
-      }
-    }).then(function (resp) {
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      return resp.text();
-    }).then(function (html) {
-      var match = html.match(/<script type="application\/json" id="application-state">([\s\S]*?)<\/script>/i);
-      if (!match) throw new Error('Contracts bootstrap payload missing');
-      var state = JSON.parse(match[1]);
-      contractsLookupData = normalizeContractsLookups(state);
+    contractsLookupPromise = Promise.all([
+      fetchRivenWeaponsLookup(),
+      fetchRivenAttributesLookup(),
+      fetchContractFeedLookups()
+    ]).then(function (parts) {
+      contractsLookupData = {
+        rivenWeapons: sortLookupList(parts[0], 'name'),
+        rivenAttributes: sortLookupList(parts[1], 'name'),
+        lichWeapons: parts[2].lichWeapons,
+        sisterWeapons: parts[2].sisterWeapons,
+        contractElements: parts[2].elements,
+        // Kept so the whisper builder's ephemera lookup cannot throw on a
+        // cached payload written before these keys existed.
+        lichEphemeras: [],
+        sisterEphemeras: []
+      };
       contractsLookupError = '';
       saveContractsLookupCache(contractsLookupData);
       return contractsLookupData;
@@ -1267,6 +2078,17 @@
     return contractsFilters.type === 'lich' ? contractsLookupData.lichEphemeras : contractsLookupData.sisterEphemeras;
   }
 
+  /**
+   * True when the selected contract type can offer per-ephemera filtering.
+   *
+   * The live feed carries `having_ephemera` as a boolean and never names the
+   * ephemera, so there is nothing to populate a per-ephemera list with. The
+   * boolean "Has Any Ephemera" filter still works and is offered instead.
+   */
+  function contractsSupportsEphemeraList() {
+    return getContractsEphemeraOptions().length > 0;
+  }
+
   function getRivenAttributeOptions(negative) {
     if (!contractsLookupData) return [];
 
@@ -1283,19 +2105,29 @@
   }
 
   function getContractElementOptions() {
-    var ephemeras = getContractsEphemeraOptions();
     var seen = Object.create(null);
     var out = [];
 
-    for (var i = 0; i < ephemeras.length; i++) {
-      var element = String(ephemeras[i].element || '').trim();
-      if (!element || seen[element]) continue;
-      seen[element] = true;
+    function add(element) {
+      var key = String(element || '').trim();
+      if (!key || seen[key]) return;
+      seen[key] = true;
       out.push({
-        value: element,
-        label: element.charAt(0).toUpperCase() + element.slice(1)
+        value: key,
+        label: key.charAt(0).toUpperCase() + key.slice(1)
       });
     }
+
+    // Elements observed on live lich/sister orders. Previously these were
+    // derived from the ephemera list, which is now empty, so the feed is the
+    // source instead - otherwise the element dropdown rendered with no options.
+    var observed = contractsLookupData && Array.isArray(contractsLookupData.contractElements)
+      ? contractsLookupData.contractElements
+      : [];
+    for (var o = 0; o < observed.length; o++) add(observed[o]);
+
+    var ephemeras = getContractsEphemeraOptions();
+    for (var i = 0; i < ephemeras.length; i++) add(ephemeras[i].element);
 
     return out.sort(function (a, b) { return a.label.localeCompare(b.label); });
   }
@@ -1375,15 +2207,23 @@
     }
 
     results.sort(function (a, b) {
+      // Price comes from buyout_price, else the current top bid. starting_price is
+      // an opening floor rather than an offer, and bid-only auctions have it set to
+      // 1, so using it here made unfilled auctions sort as if they cost 1 platinum.
+      var aPrice = WfmContracts.orderPrice(a);
+      var bPrice = WfmContracts.orderPrice(b);
+      if (aPrice === null) return bPrice === null ? 0 : 1;
+      if (bPrice === null) return -1;
+
       if (contractsFilters.sortBy === 'price_desc') {
-        return Number(b.buyout_price || b.starting_price || 0) - Number(a.buyout_price || a.starting_price || 0);
+        return bPrice - aPrice;
       }
 
       if (contractsFilters.sortBy === 'created_desc') {
         return new Date(b.created || 0).getTime() - new Date(a.created || 0).getTime();
       }
 
-      return Number(a.buyout_price || a.starting_price || 0) - Number(b.buyout_price || b.starting_price || 0);
+      return aPrice - bPrice;
     });
 
     return results;
@@ -1397,41 +2237,9 @@
     return false;
   }
 
-  function buildContractsQueryString() {
-    var params = new URLSearchParams();
-    params.set('type', contractsFilters.type);
-    params.set('sort_by', 'price_asc');
-
-    if (contractsFilters.weaponUrlName) {
-      params.set('weapon_url_name', contractsFilters.weaponUrlName);
-    }
-
-    if (contractsFilters.type === 'riven') {
-      var positiveStats = contractsFilters.positiveStats.filter(function (value, index, list) {
-        return !!value && list.indexOf(value) === index;
-      });
-      if (positiveStats.length > 0) params.set('positive_stats', positiveStats.join(','));
-      if (contractsFilters.negativeStat) params.set('negative_stats', contractsFilters.negativeStat);
-      if (contractsFilters.modRank === 'maxed') params.set('mod_rank', 'maxed');
-      return params.toString();
-    }
-
-    var selectedEphemera = findLookupByUrl(getContractsEphemeraOptions(), contractsFilters.ephemera);
-    var element = contractsFilters.element;
-    if (selectedEphemera && selectedEphemera.element) {
-      element = selectedEphemera.element;
-    }
-
-    if (element) params.set('element', element);
-    if (contractsFilters.ephemera === CONTRACT_ANY_EPHEMERA_VALUE || selectedEphemera) {
-      params.set('has_ephemera', 'true');
-    }
-
-    return params.toString();
-  }
-
   async function searchContracts() {
     contractsError = '';
+    contractsCoverageNote = '';
 
     if (!canSearchContracts()) {
       contractsResults = [];
@@ -1448,23 +2256,37 @@
 
     var requestToken = ++contractsRequestToken;
     try {
-      var resp = await fetch(AUCTIONS_SEARCH_API + '?' + buildContractsQueryString(), {
-        headers: {
-          Platform: 'pc',
-          Language: 'en'
-        }
-      });
+      // The live search endpoint rejects every filter combination, so the query
+      // string is translated into a local filter over the public contracts feed.
+      // Orders come back raw, in the shape this renderer already consumes.
+      var selectedEphemera = findLookupByUrl(getContractsEphemeraOptions(), contractsFilters.ephemera);
+      var elementFilter = contractsFilters.element;
+      if (selectedEphemera && selectedEphemera.element) elementFilter = selectedEphemera.element;
 
-      if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      var json = await resp.json();
+      var filters = {
+        type: contractsFilters.type,
+        weaponUrlName: contractsFilters.weaponUrlName || '',
+        modRank: contractsFilters.modRank === 'maxed' ? 'maxed' : '',
+        element: elementFilter || '',
+        hasEphemera: contractsFilters.ephemera === CONTRACT_ANY_EPHEMERA_VALUE || !!selectedEphemera,
+        positiveStats: contractsFilters.type === 'riven' ? contractsFilters.positiveStats : [],
+        negativeStat: contractsFilters.type === 'riven' ? (contractsFilters.negativeStat || '') : ''
+      };
+
+      var found = await WfmContracts.findContracts(filters, {
+        maxPages: WfmContracts.DEFAULT_MAX_PAGES,
+        wantCount: WfmContracts.DEFAULT_WANT_COUNT
+      });
 
       if (requestToken !== contractsRequestToken) return;
 
-      contractsResults = Array.isArray(json && json.payload && json.payload.auctions) ? json.payload.auctions.slice() : [];
+      contractsResults = found.orders;
+      contractsCoverageNote = found.note;
       contractsError = '';
     } catch (err) {
       if (requestToken !== contractsRequestToken) return;
       contractsResults = [];
+      contractsCoverageNote = '';
       contractsError = err && err.message ? err.message : 'Failed to load contracts';
     } finally {
       if (requestToken === contractsRequestToken) {
@@ -1533,10 +2355,10 @@
     if (contractsLookupError && !contractsLookupData) {
       refs.contractsView.innerHTML = '' +
         '<div class="contracts-results-shell">' +
-          '<div class="contracts-empty">' +
-            '<h3 class="contracts-empty-title">Contracts unavailable</h3>' +
-            '<p class="contracts-empty-copy">' + escapeHtml(contractsLookupError) + '</p>' +
-          '</div>' +
+        '<div class="contracts-empty">' +
+        '<h3 class="contracts-empty-title">Contracts unavailable</h3>' +
+        '<p class="contracts-empty-copy">' + escapeHtml(contractsLookupError) + '</p>' +
+        '</div>' +
         '</div>';
       return;
     }
@@ -1544,10 +2366,10 @@
     if (!contractsLookupData && contractsLookupPromise) {
       refs.contractsView.innerHTML = '' +
         '<div class="contracts-results-shell">' +
-          '<div class="contracts-loading">' +
-            '<h3 class="contracts-loading-title">Loading contracts</h3>' +
-            '<p class="contracts-loading-copy">Fetching the live Riven, Lich, Sister, weapon, and ephemera lists from warframe.market.</p>' +
-          '</div>' +
+        '<div class="contracts-loading">' +
+        '<h3 class="contracts-loading-title">Loading contracts</h3>' +
+        '<p class="contracts-loading-copy">Fetching the live Riven, Lich, Sister, weapon, and ephemera lists from warframe.market.</p>' +
+        '</div>' +
         '</div>';
       return;
     }
@@ -1556,10 +2378,15 @@
       return { value: item.urlName, label: item.name };
     });
     var elementOptions = getContractElementOptions();
-    var ephemeraOptions = getContractsEphemeraOptions().map(function (item) {
+    var namedEphemeras = getContractsEphemeraOptions().map(function (item) {
       return { value: item.urlName, label: item.name };
     });
-    ephemeraOptions.unshift({ value: CONTRACT_ANY_EPHEMERA_VALUE, label: 'Has Any Ephemera' });
+    // "Has Any Ephemera" is always offered because it is the only ephemera
+    // filter the live feed can answer. Named entries are prepended only when a
+    // real list exists, so the option is not a dead end.
+    var ephemeraOptions = contractsSupportsEphemeraList()
+      ? [{ value: CONTRACT_ANY_EPHEMERA_VALUE, label: 'Has Any Ephemera' }].concat(namedEphemeras)
+      : [{ value: CONTRACT_ANY_EPHEMERA_VALUE, label: 'Has Any Ephemera' }];
 
     var positiveOptions = getRivenAttributeOptions(false).map(function (item) {
       return { value: item.urlName, label: item.name };
@@ -1570,56 +2397,59 @@
 
     refs.contractsView.innerHTML = '' +
       '<section class="contracts-hero">' +
-        '<div class="contracts-hero-top">' +
-          '<div>' +
-            '<div class="contracts-eyebrow">Warframe Market</div>' +
-            '<h2 class="contracts-title">Contracts</h2>' +
-            '<p class="contracts-subtitle">Browse live Rivens, Kuva Liches, and Sisters of Parvos with fast filters for weapon, ephemera, element, and attribute combinations.</p>' +
-          '</div>' +
-          '<div class="contracts-summary-badge"><span class="material-icons-round">hub</span>' + escapeHtml(getContractsSummaryText()) + '</div>' +
-        '</div>' +
-        '<div class="contracts-type-switch">' +
-          '<button class="contracts-type-btn' + (contractsFilters.type === 'riven' ? ' active' : '') + '" type="button" data-contract-type="riven">Rivens</button>' +
-          '<button class="contracts-type-btn' + (contractsFilters.type === 'lich' ? ' active' : '') + '" type="button" data-contract-type="lich">Kuva Liches</button>' +
-          '<button class="contracts-type-btn' + (contractsFilters.type === 'sister' ? ' active' : '') + '" type="button" data-contract-type="sister">Sisters</button>' +
-        '</div>' +
-        '<div class="contracts-filter-grid">' +
-          '<label class="contracts-field">' +
-            '<span class="contracts-field-label">Weapon</span>' +
-            '<select class="contracts-select" id="contracts-weapon-select">' +
-              buildOptionsMarkup(weaponOptions, contractsFilters.weaponUrlName, 'Any weapon') +
-            '</select>' +
-          '</label>' +
-          (contractsFilters.type === 'riven'
-            ? (
-              '<label class="contracts-field"><span class="contracts-field-label">Positive 1</span><select class="contracts-select" id="contracts-positive-0">' + buildOptionsMarkup(positiveOptions, contractsFilters.positiveStats[0], 'Any positive stat') + '</select></label>' +
-              '<label class="contracts-field"><span class="contracts-field-label">Positive 2</span><select class="contracts-select" id="contracts-positive-1">' + buildOptionsMarkup(positiveOptions, contractsFilters.positiveStats[1], 'Any positive stat') + '</select></label>' +
-              '<label class="contracts-field"><span class="contracts-field-label">Positive 3</span><select class="contracts-select" id="contracts-positive-2">' + buildOptionsMarkup(positiveOptions, contractsFilters.positiveStats[2], 'Any positive stat') + '</select></label>' +
-              '<label class="contracts-field"><span class="contracts-field-label">Negative</span><select class="contracts-select" id="contracts-negative-select">' + buildOptionsMarkup(negativeOptions, contractsFilters.negativeStat, 'No preference') + '</select></label>' +
-              '<label class="contracts-field"><span class="contracts-field-label">Rank</span><select class="contracts-select" id="contracts-rank-select"><option value="any"' + (contractsFilters.modRank === 'any' ? ' selected' : '') + '>Any rank</option><option value="maxed"' + (contractsFilters.modRank === 'maxed' ? ' selected' : '') + '>Maxed only</option></select></label>'
-            )
-            : (
-              '<label class="contracts-field"><span class="contracts-field-label">Element</span><select class="contracts-select" id="contracts-element-select">' + buildOptionsMarkup(elementOptions, contractsFilters.element, 'Any element') + '</select></label>' +
-              '<label class="contracts-field"><span class="contracts-field-label">Ephemera</span><select class="contracts-select" id="contracts-ephemera-select">' + buildOptionsMarkup(ephemeraOptions, contractsFilters.ephemera, 'Any ephemera') + '</select></label>'
-            )
-          ) +
-          '<label class="contracts-field"><span class="contracts-field-label">Sort</span><select class="contracts-select" id="contracts-sort-select"><option value="price_asc"' + (contractsFilters.sortBy === 'price_asc' ? ' selected' : '') + '>Price ascending</option><option value="price_desc"' + (contractsFilters.sortBy === 'price_desc' ? ' selected' : '') + '>Price descending</option><option value="created_desc"' + (contractsFilters.sortBy === 'created_desc' ? ' selected' : '') + '>Most recent</option></select></label>' +
-          '<label class="contracts-field"><span class="contracts-field-label">Search Loaded Results</span><input class="contracts-control" id="contracts-quick-search" type="text" value="' + escapeHtml(contractsFilters.quickSearch) + '" placeholder="Seller, weapon, stat, note..."></label>' +
-        '</div>' +
-        '<div class="contracts-filter-actions">' +
-          '<button class="btn btn-primary" id="contracts-apply-btn" type="button">Search Contracts</button>' +
-          '<button class="btn btn-secondary" id="contracts-reset-btn" type="button">Reset Filters</button>' +
-          '<span class="contracts-results-helper">' + escapeHtml(getContractsSearchHint()) + '</span>' +
-        '</div>' +
+      '<div class="contracts-hero-top">' +
+      '<div>' +
+      '<div class="contracts-eyebrow">Warframe Market</div>' +
+      '<h2 class="contracts-title">Contracts</h2>' +
+      '<p class="contracts-subtitle">Browse live Rivens, Kuva Liches, and Sisters of Parvos with fast filters for weapon, ephemera, element, and attribute combinations.</p>' +
+      '</div>' +
+      '<div class="contracts-summary-badge"><span class="material-icons-round">hub</span>' + escapeHtml(getContractsSummaryText()) + '</div>' +
+      '</div>' +
+      '<div class="contracts-type-switch">' +
+      '<button class="contracts-type-btn' + (contractsFilters.type === 'riven' ? ' active' : '') + '" type="button" data-contract-type="riven">Rivens</button>' +
+      '<button class="contracts-type-btn' + (contractsFilters.type === 'lich' ? ' active' : '') + '" type="button" data-contract-type="lich">Kuva Liches</button>' +
+      '<button class="contracts-type-btn' + (contractsFilters.type === 'sister' ? ' active' : '') + '" type="button" data-contract-type="sister">Sisters</button>' +
+      '</div>' +
+      '<div class="contracts-filter-grid">' +
+      '<label class="contracts-field">' +
+      '<span class="contracts-field-label">Weapon</span>' +
+      '<select class="contracts-select" id="contracts-weapon-select">' +
+      buildOptionsMarkup(weaponOptions, contractsFilters.weaponUrlName, 'Any weapon') +
+      '</select>' +
+      '</label>' +
+      (contractsFilters.type === 'riven'
+        ? (
+          '<label class="contracts-field"><span class="contracts-field-label">Positive 1</span><select class="contracts-select" id="contracts-positive-0">' + buildOptionsMarkup(positiveOptions, contractsFilters.positiveStats[0], 'Any positive stat') + '</select></label>' +
+          '<label class="contracts-field"><span class="contracts-field-label">Positive 2</span><select class="contracts-select" id="contracts-positive-1">' + buildOptionsMarkup(positiveOptions, contractsFilters.positiveStats[1], 'Any positive stat') + '</select></label>' +
+          '<label class="contracts-field"><span class="contracts-field-label">Positive 3</span><select class="contracts-select" id="contracts-positive-2">' + buildOptionsMarkup(positiveOptions, contractsFilters.positiveStats[2], 'Any positive stat') + '</select></label>' +
+          '<label class="contracts-field"><span class="contracts-field-label">Negative</span><select class="contracts-select" id="contracts-negative-select">' + buildOptionsMarkup(negativeOptions, contractsFilters.negativeStat, 'No preference') + '</select></label>' +
+          '<label class="contracts-field"><span class="contracts-field-label">Rank</span><select class="contracts-select" id="contracts-rank-select"><option value="any"' + (contractsFilters.modRank === 'any' ? ' selected' : '') + '>Any rank</option><option value="maxed"' + (contractsFilters.modRank === 'maxed' ? ' selected' : '') + '>Maxed only</option></select></label>'
+        )
+        : (
+          '<label class="contracts-field"><span class="contracts-field-label">Element</span><select class="contracts-select" id="contracts-element-select">' + buildOptionsMarkup(elementOptions, contractsFilters.element, 'Any element') + '</select></label>' +
+          // The feed reports having_ephemera as a boolean and never names the
+          // ephemera, so ephemeraOptions is normally just "Has Any Ephemera" -
+          // the one ephemera filter the data can actually answer.
+          '<label class="contracts-field"><span class="contracts-field-label">Ephemera</span><select class="contracts-select" id="contracts-ephemera-select">' + buildOptionsMarkup(ephemeraOptions, contractsFilters.ephemera, 'Any ephemera') + '</select></label>'
+        )
+      ) +
+      '<label class="contracts-field"><span class="contracts-field-label">Sort</span><select class="contracts-select" id="contracts-sort-select"><option value="price_asc"' + (contractsFilters.sortBy === 'price_asc' ? ' selected' : '') + '>Price ascending</option><option value="price_desc"' + (contractsFilters.sortBy === 'price_desc' ? ' selected' : '') + '>Price descending</option><option value="created_desc"' + (contractsFilters.sortBy === 'created_desc' ? ' selected' : '') + '>Most recent</option></select></label>' +
+      '<label class="contracts-field"><span class="contracts-field-label">Search Loaded Results</span><input class="contracts-control" id="contracts-quick-search" type="text" value="' + escapeHtml(contractsFilters.quickSearch) + '" placeholder="Seller, weapon, stat, note..."></label>' +
+      '</div>' +
+      '<div class="contracts-filter-actions">' +
+      '<button class="btn btn-primary" id="contracts-apply-btn" type="button">Search Contracts</button>' +
+      '<button class="btn btn-secondary" id="contracts-reset-btn" type="button">Reset Filters</button>' +
+      '<span class="contracts-results-helper">' + escapeHtml(getContractsSearchHint()) + '</span>' +
+      '</div>' +
       '</section>' +
       '<section class="contracts-results-shell">' +
-        '<div class="contracts-results-head">' +
-          '<div>' +
-            '<h3 class="contracts-results-title">' + escapeHtml(getContractsResultsTitle()) + '</h3>' +
-            '<div class="contracts-results-sub">' + escapeHtml(getContractsResultsSubtext(getFilteredContractsResults())) + '</div>' +
-          '</div>' +
-        '</div>' +
-        '<div class="contracts-results" id="contracts-results-list"></div>' +
+      '<div class="contracts-results-head">' +
+      '<div>' +
+      '<h3 class="contracts-results-title">' + escapeHtml(getContractsResultsTitle()) + '</h3>' +
+      '<div class="contracts-results-sub">' + escapeHtml(getContractsResultsSubtext(getFilteredContractsResults())) + '</div>' +
+      '</div>' +
+      '</div>' +
+      '<div class="contracts-results" id="contracts-results-list"></div>' +
       '</section>';
 
     renderContractsResultsList($('#contracts-results-list'));
@@ -1665,12 +2495,27 @@
     if (filteredResults.length === 0) {
       var emptyEl = document.createElement('div');
       emptyEl.className = 'contracts-empty';
-      emptyEl.innerHTML = '<h3 class="contracts-empty-title">No contracts found</h3><p class="contracts-empty-copy">Try another weapon, relax one stat filter, or switch the contract type.</p>';
+
+      // An empty result means "none in the window we walked", which is not the same
+      // as "none exist". The coverage note carries the distinction.
+      var emptyCopy = contractsCoverageNote
+        ? escapeHtml(contractsCoverageNote)
+        : 'Try another weapon, relax one stat filter, or switch the contract type.';
+
+      emptyEl.innerHTML = '<h3 class="contracts-empty-title">No contracts found</h3><p class="contracts-empty-copy">' + emptyCopy + '</p>';
       listEl.appendChild(emptyEl);
       return;
     }
 
     var fragment = document.createDocumentFragment();
+
+    if (contractsCoverageNote) {
+      var coverage = document.createElement('p');
+      coverage.className = 'contracts-coverage-note';
+      coverage.textContent = contractsCoverageNote;
+      fragment.appendChild(coverage);
+    }
+
     var limit = Math.min(filteredResults.length, contractsVisibleCount);
     for (var i = 0; i < limit; i++) {
       fragment.appendChild(createContractCard(filteredResults[i]));
@@ -1722,7 +2567,13 @@
       return item.having_ephemera && entry.element === item.element;
     })[0] || null;
     var weaponName = weapon ? weapon.name : safeNameFromSlug(item.weapon_url_name);
-    var price = String(auction && (auction.buyout_price || auction.starting_price || 0));
+    // A bid-only auction with no bids yet has starting_price 1 and no buyout_price,
+    // so the price has to come from the shared helper. When nobody is asking a
+    // price, the whisper must not invent one.
+    var currentPrice = WfmContracts.orderPrice(auction);
+    var priceClause = currentPrice === null
+      ? '. What is your asking price?'
+      : ' for ' + currentPrice + ' platinum';
     var itemLabel = weaponName;
 
     if (type === 'riven') {
@@ -1747,7 +2598,7 @@
       }
     }
 
-    return '/w ' + (owner.ingame_name || 'Unknown') + ' Hi! I want to buy your ' + itemLabel + ' for ' + price + ' platinum. (warframe companion app)';
+    return '/w ' + (owner.ingame_name || 'Unknown') + ' Hi! I want to buy your ' + itemLabel + priceClause + '. (warframe companion app)';
   }
 
   async function copyContractWhisper(auction) {
@@ -1814,7 +2665,7 @@
     var mediaPath = weapon ? (weapon.icon || weapon.thumb) : '';
     if (mediaPath) {
       var img = document.createElement('img');
-      img.src = getMarketImageUrl(mediaPath);
+      img.src = getMarketItemImageUrl(weapon, mediaPath);
       img.alt = weapon.name || formatContractTypeLabel(type);
       img.loading = 'lazy';
       img.addEventListener('error', function () {
@@ -1912,7 +2763,34 @@
 
     var price = document.createElement('div');
     price.className = 'contracts-price';
-    appendPlatinumAmount(price, auction.buyout_price || auction.starting_price || 0, 'contracts-price-main', 'contracts-price-icon');
+
+    // starting_price is an opening floor, not an asking price, and a bid-only
+    // auction with no bids still carries starting_price 1. Rendering that as the
+    // price would advertise unfilled auctions for 1 platinum.
+    var currentPrice = WfmContracts.orderPrice(auction);
+    if (currentPrice === null) {
+      var noPrice = document.createElement('span');
+      noPrice.className = 'contracts-price-none';
+      noPrice.textContent = 'No price yet';
+      price.appendChild(noPrice);
+
+      if (WfmContracts.finiteNumber(auction.starting_price)) {
+        var opening = document.createElement('span');
+        opening.className = 'contracts-price-hint';
+        opening.textContent = 'opens at ' + auction.starting_price + ' plat';
+        price.appendChild(opening);
+      }
+    } else {
+      appendPlatinumAmount(price, currentPrice, 'contracts-price-main', 'contracts-price-icon');
+
+      if (!WfmContracts.isBuyout(auction)) {
+        var bidHint = document.createElement('span');
+        bidHint.className = 'contracts-price-hint';
+        bidHint.textContent = 'current bid';
+        price.appendChild(bidHint);
+      }
+    }
+
     side.appendChild(price);
 
     var seller = document.createElement('div');
@@ -1968,6 +2846,10 @@
     }
 
     showMarketLoading(true);
+    // The fetch and the post-fetch render are separated so a render-side crash
+    // is not misreported as a network failure. They used to share one try block,
+    // which is how an undefined-variable crash inside the filter pass surfaced as
+    // "Failed to fetch market items" and sent debugging after the wrong layer.
     try {
       var resp = await fetch(MARKET_API);
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
@@ -1990,10 +2872,19 @@
       }).filter(function (item) { return !!item.slug; }).sort(function (a, b) { return a.name.localeCompare(b.name); });
 
       saveMarketCache(marketItems);
-      onMarketItemsLoaded();
     } catch (err) {
       console.error('Failed to fetch market items:', err);
       showMarketError(err.message);
+      return;
+    }
+
+    try {
+      onMarketItemsLoaded();
+    } catch (err) {
+      // The data is good; only rendering failed. Say so, and keep the items
+      // reachable instead of blanking the panel.
+      console.error('Market items loaded but failed to render:', err);
+      showMarketError('Market data loaded, but the list failed to render: ' + (err && err.message ? err.message : 'unknown error'));
     }
   }
 
@@ -2034,28 +2925,126 @@
 
   function onMarketItemsLoaded() {
     showMarketLoading(false);
+    marketGroups = buildMarketItemGroups(marketItems);
     applyMarketFilters();
     updateMarketCategoryCounts();
     renderTradeAnalyticsSearchResults();
   }
 
-  // ---------- Filters ----------
-  function applyMarketFilters() {
-    var normalizedQuery = String(marketSearchQuery || '').toLowerCase().trim();
+// ---------- Filters ----------
+   function applyMarketFilters() {
+     var normalizedQuery = String(marketSearchQuery || '').toLowerCase().trim();
 
-    filteredMarketItems = marketItems.filter(function (item) {
-      if (marketCategory !== 'all' && item.category !== marketCategory) return false;
-      if (normalizedQuery && String(item.name || '').toLowerCase().indexOf(normalizedQuery) === -1) return false;
-      return true;
-    });
-    renderMarketItems();
-    updateMarketPanelHeader();
+     filteredMarketItems = marketGroups.filter(function (group) {
+       if (marketCategory !== 'all') {
+         // A set is shown under its own category, and also under a component's category
+         // so filtering by "barrel" still surfaces the weapons that have one.
+         var catHit = groupItem(group).category === marketCategory;
+         if (!catHit && group.parts) {
+           for (var p = 0; p < group.parts.length; p++) {
+             if (group.parts[p].category === marketCategory) { catHit = true; break; }
+           }
+         }
+         if (!catHit) return false;
+       }
+       
+       // Inventory filters
+       if (showOwnedOnly && !inventoryService.isOwned(group.name)) {
+         // For sets, check if any part is owned
+         if (group.parts) {
+           var anyPartOwned = false;
+           for (var p = 0; p < group.parts.length; p++) {
+             if (inventoryService.isOwned(group.parts[p].name)) {
+               anyPartOwned = true;
+               break;
+             }
+           }
+           if (!anyPartOwned) return false;
+         } else {
+           return false;
+         }
+       }
+       
+       if (showNotOwnedOnly && inventoryService.isOwned(group.name)) {
+         // For sets, hide if any part is owned
+         if (group.parts) {
+           for (var p = 0; p < group.parts.length; p++) {
+             if (inventoryService.isOwned(group.parts[p].name)) return false;
+           }
+         } else {
+           return false;
+         }
+       }
+       
+       if (showMasteredOnly && !inventoryService.isMastered(group.name)) {
+         // For sets, check if any part is mastered
+         if (group.parts) {
+           var anyPartMastered = false;
+           for (var p = 0; p < group.parts.length; p++) {
+             if (inventoryService.isMastered(group.parts[p].name)) {
+               anyPartMastered = true;
+               break;
+             }
+           }
+           if (!anyPartMastered) return false;
+         } else {
+           return false;
+         }
+       }
+       
+       if (showVaultedOnly && !inventoryService.isVaulted(group.name)) {
+         // For sets, show only if any part is vaulted
+         if (group.parts) {
+           var anyPartVaulted = false;
+           for (var p = 0; p < group.parts.length; p++) {
+             if (inventoryService.isVaulted(group.parts[p].name)) {
+               anyPartVaulted = true;
+               break;
+             }
+           }
+           if (!anyPartVaulted) return false;
+         } else {
+           return false;
+         }
+       }
+       
+       if (showActiveOnly && inventoryService.isVaulted(group.name)) {
+         // For sets, hide if any part is vaulted (active = not vaulted)
+         if (group.parts) {
+           for (var p = 0; p < group.parts.length; p++) {
+             if (inventoryService.isVaulted(group.parts[p].name)) return false;
+           }
+         } else {
+           return false;
+         }
+       }
+       
+       if (normalizedQuery) {
+         if (String(group.name || '').toLowerCase().indexOf(normalizedQuery) === -1) {
+           var nameHit = false;
+           if (group.parts) {
+             for (var q = 0; q < group.parts.length; q++) {
+               if (String(group.parts[q].name || '').toLowerCase().indexOf(normalizedQuery) !== -1) { nameHit = true; break; }
+             }
+           }
+           if (!nameHit) return false;
+         }
+       }
+       return true;
+     });
+     renderMarketItems();
+     updateMarketPanelHeader();
+   }
+
+  function groupItem(group) {
+    return group.kind === 'set' ? group.setItem : group.item;
   }
 
   function updateMarketCategoryCounts() {
-    var counts = { all: marketItems.length };
-    for (var i = 0; i < marketItems.length; i++) {
-      var cat = marketItems[i].category;
+    var counts = { all: marketGroups.length };
+    for (var i = 0; i < marketGroups.length; i++) {
+      var group = marketGroups[i];
+      var cat = groupItem(group).category;
       counts[cat] = (counts[cat] || 0) + 1;
     }
     document.querySelectorAll('.market-cat-btn').forEach(function (btn) {
@@ -2068,6 +3057,84 @@
   }
 
   // ---------- Render Items ----------
+  // WFM sells a weapon as a set plus its individual components, so a flat item list
+  // spends most of the grid on "Acceltra Prime Barrel / Blueprint / Receiver / Stock",
+  // all of which share the weapon's artwork and none of which is useful on its own.
+  // Collapse each set into a single weapon card and let the parts be chosen on demand,
+  // which is how the WFM site and set managers present a buildable item.
+  const MARKET_PART_WORDS = [
+    'Blueprint', 'Carapace', 'Cerebrum', 'Neuroptics', 'Chassis', 'Fuselage', 'Engines',
+    'Receiver', 'Barrel', 'Stock', 'Blade', 'Hilt', 'Guard', 'Handle', 'Grip', 'Imprint',
+    'Core', 'Motor', 'Stringer', 'Housing', 'Pylon', 'Optic', 'Scope', 'Muzzle', 'Systems',
+    'Wings', 'Harness', 'Clip', 'Magazine', 'Trigger', 'Tip', 'Head', 'Frame', 'Link'
+  ];
+  const MARKET_SET_SUFFIX = /\s+Set$/i;
+
+  function getMarketPartWord(name) {
+    var words = String(name || '').trim().split(/\s+/);
+    if (words.length < 2) return '';
+    var last = words[words.length - 1];
+    return MARKET_PART_WORDS.indexOf(last) === -1 ? '' : last;
+  }
+
+  // Key a component under the weapon it belongs to. WFM lists "<weapon> Set" rather
+  // than a bare "<weapon>", so fall back to the set listing when only that exists.
+  function getMarketSetKey(name, byName) {
+    var partWord = getMarketPartWord(name);
+    if (!partWord) return '';
+    var base = String(name).trim().slice(0, -(partWord.length)).trim();
+    if (!base) return '';
+    if (byName[base]) return base;
+    if (byName[base + ' Set']) return base + ' Set';
+    return base;
+  }
+
+  function buildMarketItemGroups(items) {
+    var byName = {};
+    for (var i = 0; i < items.length; i++) byName[items[i].name] = items[i];
+
+    var children = {};
+    var loose = [];
+    for (var n = 0; n < items.length; n++) {
+      var key = getMarketSetKey(items[n].name, byName);
+      if (key && key !== items[n].name) {
+        if (!children[key]) children[key] = [];
+        children[key].push(items[n]);
+      } else {
+        loose.push(items[n]);
+      }
+    }
+
+    var groups = [];
+    for (var c = 0; c < loose.length; c++) {
+      var looseItem = loose[c];
+      var setKey = byName[looseItem.name] ? looseItem.name : (byName[looseItem.name + ' Set'] ? looseItem.name + ' Set' : '');
+      var parts = setKey ? (children[setKey] || []) : [];
+      if (parts.length >= 2) {
+        groups.push({
+          kind: 'set',
+          // The bare weapon name is what the catalogue and the wiki file the art under.
+          name: looseItem.name.replace(MARKET_SET_SUFFIX, ''),
+          setItem: byName[setKey] || looseItem,
+          parts: parts.concat([byName[setKey]].filter(Boolean))
+        });
+        delete children[setKey];
+      } else {
+        groups.push({ kind: 'item', name: looseItem.name, item: looseItem });
+      }
+    }
+
+    // Anything left over is a component whose weapon is not listed; keep it addressable.
+    for (var left in children) {
+      if (!Object.prototype.hasOwnProperty.call(children, left)) continue;
+      for (var l = 0; l < children[left].length; l++) {
+        groups.push({ kind: 'item', name: children[left][l].name, item: children[left][l] });
+      }
+    }
+
+    return groups;
+  }
+
   function renderMarketItems() {
     var grid = $('#market-grid');
     if (!grid) return;
@@ -2087,8 +3154,7 @@
     var limit = Math.min(filteredMarketItems.length, 200); // show max 200
     for (var j = 0; j < limit; j++) {
       fragment.appendChild(createMarketCard(filteredMarketItems[j], j));
-    }
-    if (filteredMarketItems.length > 200) {
+    }    if (filteredMarketItems.length > 200) {
       var moreEl = document.createElement('div');
       moreEl.className = 'market-more-hint';
       moreEl.textContent = (filteredMarketItems.length - 200) + ' more items. Use search to narrow.';
@@ -2097,25 +3163,39 @@
     grid.appendChild(fragment);
   }
 
-  function createMarketCard(item, index) {
+  function createMarketCard(entry, index) {
+    var isSet = entry && entry.kind === 'set';
+    // A set card is the weapon itself, so the bare weapon name is what the art resolves
+    // against; a plain card is just the item.
+    var item = isSet ? entry.setItem : entry.item;
+    var artItem = isSet ? { name: entry.name, thumb: entry.setItem.thumb, image: entry.setItem.image } : entry.item;
+
     var card = document.createElement('div');
-    card.className = 'market-item-card';
+    card.className = 'market-item-card' + (isSet ? ' is-set' : '');
     card.style.animationDelay = Math.min(index * 8, 300) + 'ms';
 
     var imgWrap = document.createElement('div');
     imgWrap.className = 'market-item-thumb';
-    var imagePath = getMarketDisplayImage(item);
+    var imagePath = getMarketDisplayImage(artItem);
     if (imagePath) {
       var img = document.createElement('img');
-      img.src = getMarketImageUrl(imagePath);
-      img.alt = item.name;
+      img.src = getMarketItemImageUrl(artItem, imagePath);
+      img.alt = entry.name;
       img.loading = 'lazy';
       img.addEventListener('error', function () {
         img.style.display = 'none';
         var ph = imgWrap.querySelector('.mi-placeholder');
         if (ph) ph.style.display = 'flex';
+        // The catalogue and WFM's CDN both came up empty; try the wiki before giving up.
+        upgradeMarketImageFromWiki(img, artItem.name);
       });
       imgWrap.appendChild(img);
+      if (!isSet) {
+        labelMarketImageFallback(img, artItem, imgWrap);
+        if (!getLocalCatalogImageUrl(artItem.name)) {
+          upgradeMarketImageFromWiki(img, artItem.name);
+        }
+      }
     }
     var placeholder = document.createElement('div');
     placeholder.className = 'mi-placeholder';
@@ -2130,27 +3210,49 @@
     info.className = 'market-item-info';
     var name = document.createElement('div');
     name.className = 'market-item-name';
-    name.textContent = item.name;
-    name.title = item.name;
-    var tagEl = document.createElement('div');
-    tagEl.className = 'market-item-tag';
-    tagEl.textContent = item.category.replace(/_/g, ' ');
+    name.textContent = entry.name;
+    name.title = entry.name;
+var tagEl = document.createElement('div');
+     tagEl.className = 'market-item-tag';
+     if (isSet) {
+       var ownedCount = 0;
+       if (window.inventoryService) {
+         for (var k = 0; k < entry.parts.length; k++) {
+           if (window.inventoryService.isOwned(entry.parts[k].name)) {
+             ownedCount++;
+           }
+         }
+       }
+       tagEl.textContent = ownedCount + '/' + entry.parts.length + ' parts';
+       tagEl.title = 'Owned ' + ownedCount + ' of ' + entry.parts.length + ' parts';
+     } else {
+       tagEl.textContent = item.category.replace(/_/g, ' ');
+     }
 
     info.appendChild(name);
     info.appendChild(tagEl);
 
-    card.appendChild(imgWrap);
-    card.appendChild(info);
+card.appendChild(imgWrap);
+     card.appendChild(info);
 
-    card.addEventListener('click', function () {
-      openOrdersModal(item);
-    });
+     // Owned badge for non-set items
+     if (!isSet && window.inventoryService && window.inventoryService.isOwned(item.name)) {
+       var ownedBadge = document.createElement('div');
+       ownedBadge.className = 'owned-badge';
+       ownedBadge.title = 'Owned';
+       ownedBadge.innerHTML = '&check;';
+       card.appendChild(ownedBadge);
+     }
 
-    return card;
+     card.addEventListener('click', function () {
+       openOrdersModal(item, isSet ? entry : null);
+     });
+
+     return card;
   }
 
   // ---------- Orders Modal ----------
-  async function openOrdersModal(item) {
+  async function openOrdersModal(item, setGroup) {
     var modal = $('#market-orders-modal');
     if (!modal) return;
     modal.classList.remove('hidden');
@@ -2159,11 +3261,77 @@
     var imgEl = $('#orders-item-img');
     var ordersBody = $('#orders-body');
 
-    if (titleEl) titleEl.textContent = item.name;
-    if (imgEl) {
-      imgEl.src = getMarketImageUrl(getMarketDisplayImage(item));
-      imgEl.alt = item.name;
+    // Heading names whatever is actually being listed. When a component of a set
+    // is targeted, the set name alone was ambiguous - it read "Soma Prime" over
+    // a barrel's orders, which looks like the wrong item.
+    var showingSet = !setGroup || !item || (setGroup.setItem && setGroup.setItem.slug === item.slug);
+    if (titleEl) {
+      titleEl.textContent = showingSet
+        ? (setGroup ? setGroup.name : item.name)
+        : item.name;
+      if (!showingSet && setGroup) {
+        titleEl.title = 'Part of ' + setGroup.name;
+      } else {
+        titleEl.title = '';
+      }
     }
+    if (imgEl) {
+      // A set card shows the weapon, so ask for the bare weapon's art rather than the
+      // "X Set" listing's, which is the same picture but resolves more reliably.
+      var artItem = setGroup
+        ? { name: setGroup.name, thumb: item.thumb, image: item.image }
+        : item;
+      imgEl.src = getMarketItemImageUrl(artItem);
+      imgEl.alt = showingSet ? (setGroup ? setGroup.name : item.name) : item.name;
+      imgEl.title = '';
+    }
+
+    // Set completion status
+    // Remove any existing set completion element
+    var existing = $('.orders-set-completion');
+    if (existing) {
+      existing.remove();
+    }
+    var setCompletionEl = document.createElement('div');
+    setCompletionEl.className = 'orders-set-completion';
+    if (setGroup) {
+      // Calculate owned parts in the set
+      var ownedCount = 0;
+      for (var i = 0; i < setGroup.parts.length; i++) {
+        var part = setGroup.parts[i];
+        var partOwned = false;
+        if (window.inventoryService) {
+          partOwned = window.inventoryService.isOwned(part.name);
+        } else {
+          var ownedKey = 'warframe_inventory_owned_items';
+          var owned = new Set(JSON.parse(localStorage.getItem(ownedKey) || '[]'));
+          partOwned = owned.has(part.name);
+        }
+        if (partOwned) ownedCount++;
+      }
+      setCompletionEl.textContent = 'Owned: ' + ownedCount + '/' + setGroup.parts.length + ' parts';
+    } else {
+      // Single non-set item
+      var itemOwned = false;
+      if (window.inventoryService) {
+        itemOwned = window.inventoryService.isOwned(item.name);
+      } else {
+        var ownedKey = 'warframe_inventory_owned_items';
+        var owned = new Set(JSON.parse(localStorage.getItem(ownedKey) || '[]'));
+        itemOwned = owned.has(item.name);
+      }
+      setCompletionEl.textContent = itemOwned ? 'Owned' : 'Not Owned';
+    }
+    // Insert after the image element (if exists) or after the title
+    if (imgEl) {
+      imgEl.insertAdjacentElement('afterend', setCompletionEl);
+    } else {
+      if (titleEl) {
+        titleEl.insertAdjacentElement('afterend', setCompletionEl);
+      }
+    }
+
+    renderOrdersPartsBar(setGroup || null, item);
 
     ordersBody.textContent = '';
     var loadMsg = document.createElement('div');
@@ -2175,16 +3343,105 @@
     currentOrdersItemName = item.name;
     currentOrdersWikiUrl = buildWikiUrl(item);
     currentOrdersItemMeta = item;
+    currentOrdersSetGroup = setGroup || null;
     ordersOnlineOnly = false;
     ordersOnlineMode = 'all_online';
-    await fetchAndRenderOrders(item.slug);
+    var token = ++ordersOpenToken;
+    await fetchAndRenderOrders(item.slug, token);
 
     // Auto-refresh
     clearInterval(ordersRefreshInterval);
     ordersRefreshInterval = setInterval(function () {
-      fetchAndRenderOrders(item.slug);
+      fetchAndRenderOrders(item.slug, ordersOpenToken);
     }, 60000);
   }
+
+  // Choosing a component is the whole point of grouping the grid by set, so offer the
+  // components as a row of chips above the orders. The weapon art carries over and the
+  // wiki's generic silhouette says which component it is, since no reachable host has
+  // per-component artwork.
+  function renderOrdersPartsBar(setGroup, activeItem) {
+    var bar = $('#orders-parts-bar');
+    if (!bar) return;
+    bar.textContent = '';
+    bar.classList.add('hidden');
+    if (!setGroup || !setGroup.parts || !setGroup.parts.length) return;
+
+    bar.classList.remove('hidden');
+
+    var heading = document.createElement('div');
+    heading.className = 'orders-parts-heading';
+    heading.textContent = 'Components';
+    bar.appendChild(heading);
+
+    var row = document.createElement('div');
+    row.className = 'orders-parts-row';
+
+    for (var i = 0; i < setGroup.parts.length; i++) {
+      row.appendChild(createOrdersPartChip(setGroup.parts[i], setGroup, activeItem, i === 0));
+    }
+
+    bar.appendChild(row);
+  }
+
+function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
+  var chip = document.createElement('button');
+  chip.type = 'button';
+  chip.className = 'orders-part-chip';
+  if (isFirst || (activeItem && part.slug === activeItem.slug)) chip.classList.add('active');
+
+  var thumb = document.createElement('span');
+  thumb.className = 'orders-part-thumb';
+  var img = document.createElement('img');
+  img.alt = '';
+  img.loading = 'lazy';
+  img.src = getMarketItemImageUrl(part, getMarketDisplayImage(part));
+  img.addEventListener('error', function () {
+    img.style.display = 'none';
+  });
+  thumb.appendChild(img);
+
+  var iconTitle = getMarketPartIconTitle(part.name);
+  if (iconTitle) {
+    var icon = document.createElement('img');
+    icon.className = 'orders-part-icon';
+    icon.alt = '';
+    requestMarketPartIcon(icon, iconTitle);
+    thumb.appendChild(icon);
+  }
+
+  // Check if part is owned and add owned badge to thumb
+  var isOwned = false;
+  if (window.inventoryService) {
+    isOwned = window.inventoryService.isOwned(part.name);
+  } else {
+    // Fallback: check localStorage directly
+    var ownedKey = 'warframe_inventory_owned_items';
+    var owned = new Set(JSON.parse(localStorage.getItem(ownedKey) || '[]'));
+    isOwned = owned.has(part.name);
+  }
+  if (isOwned) {
+    var ownedBadge = document.createElement('div');
+    ownedBadge.className = 'owned-badge';
+    ownedBadge.title = 'Owned';
+    ownedBadge.innerHTML = '&check;';
+    thumb.appendChild(ownedBadge);
+  }
+
+  var label = document.createElement('span');
+  label.className = 'orders-part-label';
+  label.textContent = / Set$/i.test(part.name) ? 'Complete set' : part.name.split(/\s+/).pop();
+
+  chip.appendChild(thumb);
+  chip.appendChild(label);
+  chip.title = part.name;
+  chip.addEventListener('click', function () {
+    if (activeItem && part.slug === activeItem.slug) return;
+    openOrdersModal(part, setGroup);
+  });
+
+  return chip;
+}
 
   function closeOrdersModal() {
     var modal = $('#market-orders-modal');
@@ -2194,8 +3451,59 @@
     currentOrdersItemName = null;
     currentOrdersWikiUrl = null;
     currentOrdersItemMeta = null;
+    currentOrdersSetGroup = null;
     ordersOnlineOnly = false;
     ordersOnlineMode = 'all_online';
+  }
+
+  /**
+   * Open the orders window straight onto one component of a set.
+   *
+   * Searching the market for a part name only ever finds the parent set, because
+   * set components are folded into the set's group and are not listed on their
+   * own. So a shortcut from an item's craft parts has to resolve the part itself
+   * and open its orders directly, which is what clicking the component chip in
+   * the strip already did - this just makes it reachable from elsewhere.
+   */
+  async function openPartOrdersByName(partName) {
+    var wanted = String(partName || '').trim().toLowerCase();
+    if (!wanted) return { ok: false, message: 'No part name given.' };
+
+    // The market catalogue loads lazily on first navigation, so a shortcut that
+    // arrives before the panel was ever opened would find an empty group list
+    // and wrongly report the part as unlisted.
+    if (marketGroups.length === 0) {
+      try {
+        await loadMarketItems();
+      } catch (err) {
+        return { ok: false, message: 'Market data could not be loaded: ' + (err && err.message ? err.message : 'unknown error') };
+      }
+    }
+    if (marketGroups.length === 0) {
+      return { ok: false, message: 'Market data is not available yet.' };
+    }
+
+    for (var i = 0; i < marketGroups.length; i++) {
+      var group = marketGroups[i];
+      var candidates = [];
+      if (group.kind === 'set') {
+        candidates = group.parts || [];
+      } else {
+        candidates = [group.item];
+      }
+      for (var p = 0; p < candidates.length; p++) {
+        var candidate = candidates[p];
+        if (!candidate) continue;
+        var name = String(candidate.name || '').trim().toLowerCase();
+        // The set itself is listed in its own parts array under a "Set" name;
+        // matching on it would reopen the set rather than a component.
+        if (name === wanted && !/ set$/i.test(candidate.name || '')) {
+          await openOrdersModal(candidate, group.kind === 'set' ? group : null);
+          return { ok: true, item: candidate.name };
+        }
+      }
+    }
+    return { ok: false, message: 'No market listing found for "' + partName + '".' };
   }
 
   function isOnlineSeller(order) {
@@ -2265,17 +3573,20 @@
     if (tags.indexOf('arcane_enhancement') !== -1 || tags.indexOf('arcane_helmet') !== -1) return true;
 
     var allOrders = [].concat(sellOrders || [], buyOrders || []);
-    return allOrders.some(function(order) {
+    return allOrders.some(function (order) {
       return getOrderRankValue(order) !== null;
     });
   }
 
-  async function fetchAndRenderOrders(slug) {
+  async function fetchAndRenderOrders(slug, token) {
     var ordersBody = $('#orders-body');
     if (!ordersBody) return;
+    if (token !== undefined && token !== ordersOpenToken) return;
 
     try {
       var orders = await fetchOrdersV2(slug);
+      // The item may have changed while this was in flight; that response is now stale.
+      if (token !== undefined && token !== ordersOpenToken) return;
 
       // Filter visible orders
       var sellOrders = [];
@@ -2308,6 +3619,7 @@
         tags: currentOrdersItemMeta && currentOrdersItemMeta.tags
       });
     } catch (err) {
+      if (token !== undefined && token !== ordersOpenToken) return;
       ordersBody.textContent = '';
       var errEl = document.createElement('div');
       errEl.className = 'orders-error';
@@ -2469,7 +3781,7 @@
 
     if (filtered.length === 0) return null;
 
-    filtered.sort(function(a, b) {
+    filtered.sort(function (a, b) {
       if (orderType === 'sell') return Number(a.platinum || 0) - Number(b.platinum || 0);
       return Number(b.platinum || 0) - Number(a.platinum || 0);
     });
@@ -2502,10 +3814,10 @@
     var spread = bestSell && bestBuy ? Number(bestSell.platinum) - Number(bestBuy.platinum) : null;
     var change7vs30 = isFinite(avg7) && isFinite(avg30) ? (avg7 - avg30) : null;
 
-    var visibleSellOrders = orders.filter(function(order) {
+    var visibleSellOrders = orders.filter(function (order) {
       return order && order.visible !== false && order.order_type === 'sell';
     });
-    var visibleBuyOrders = orders.filter(function(order) {
+    var visibleBuyOrders = orders.filter(function (order) {
       return order && order.visible !== false && order.order_type === 'buy';
     });
 
@@ -2547,10 +3859,10 @@
       : [];
     var closed7 = closedHistory.slice(-7);
     var closed30 = closedHistory.slice(-30);
-    var visibleSellOrders = (Array.isArray(orders) ? orders : []).filter(function(order) {
+    var visibleSellOrders = (Array.isArray(orders) ? orders : []).filter(function (order) {
       return order && order.visible !== false && order.order_type === 'sell';
     });
-    var visibleBuyOrders = (Array.isArray(orders) ? orders : []).filter(function(order) {
+    var visibleBuyOrders = (Array.isArray(orders) ? orders : []).filter(function (order) {
       return order && order.visible !== false && order.order_type === 'buy';
     });
 
@@ -2575,8 +3887,8 @@
   async function buildPrimeSetPartSnapshot(part, forceRefresh) {
     try {
       var results = await Promise.all([
-        fetchItemStatistics(part.slug, !!forceRefresh).catch(function() { return null; }),
-        fetchOrdersForAnalytics(part.slug, !!forceRefresh).catch(function() { return []; })
+        fetchItemStatistics(part.slug, !!forceRefresh).catch(function () { return null; }),
+        fetchOrdersForAnalytics(part.slug, !!forceRefresh).catch(function () { return []; })
       ]);
       return buildItemPriceSnapshot(part, results[0], results[1]);
     } catch (err) {
@@ -2614,14 +3926,14 @@
     };
     var setPrice = getSnapshotPrice(setSnapshot);
 
-    var snapshots = await Promise.all(parts.map(function(part) {
+    var snapshots = await Promise.all(parts.map(function (part) {
       return buildPrimeSetPartSnapshot(part, !!forceRefresh);
     }));
 
-    var pricedParts = snapshots.filter(function(snapshot) {
+    var pricedParts = snapshots.filter(function (snapshot) {
       return getNumberOrNull(snapshot.price) !== null;
     });
-    var partsTotal = pricedParts.reduce(function(total, snapshot) {
+    var partsTotal = pricedParts.reduce(function (total, snapshot) {
       return total + Number(snapshot.price || 0);
     }, 0);
     var setValue = getNumberOrNull(setPrice.value);
@@ -2697,10 +4009,10 @@
       var imagePath = getMarketDisplayImage(item);
       if (imagePath) {
         var img = document.createElement('img');
-        img.src = getMarketImageUrl(imagePath);
+        img.src = getMarketItemImageUrl(item, imagePath);
         img.alt = item.name;
         img.loading = 'lazy';
-        img.addEventListener('error', function() {
+        img.addEventListener('error', function () {
           img.style.display = 'none';
         });
         thumb.appendChild(img);
@@ -2727,8 +4039,8 @@
 
       btn.appendChild(thumb);
       btn.appendChild(copy);
-      btn.addEventListener('click', function(targetItem) {
-        return function() {
+      btn.addEventListener('click', function (targetItem) {
+        return function () {
           selectAnalyticsItem(targetItem, false);
         };
       }(item));
@@ -2885,7 +4197,7 @@
     table.className = 'prime-profit-table';
     var thead = document.createElement('thead');
     var headRow = document.createElement('tr');
-    ['Part', 'Price', 'Source', '7D Avg', 'Live Orders'].forEach(function(labelText) {
+    ['Part', 'Price', 'Source', '7D Avg', 'Live Orders'].forEach(function (labelText) {
       var th = document.createElement('th');
       th.textContent = labelText;
       headRow.appendChild(th);
@@ -3003,23 +4315,25 @@
     if (emptyState) emptyState.classList.add('hidden');
     if (overview) overview.classList.remove('hidden');
 
+    var resolvedItemImageUrl = getMarketItemImageUrl(model.item);
     if (img) {
-      var imagePath = getMarketDisplayImage(model.item);
-      img.src = imagePath ? getMarketImageUrl(imagePath) : '';
+      if (resolvedItemImageUrl) {
+        img.src = resolvedItemImageUrl;
+      } else {
+        img.removeAttribute('src');
+      }
       img.alt = model.item.name;
-      img.classList.toggle('hidden', !imagePath);
-      img.onerror = function() {
+      img.classList.toggle('hidden', !resolvedItemImageUrl);
+      img.onerror = function () {
         img.classList.add('hidden');
         if (placeholder) placeholder.classList.remove('hidden');
       };
-      img.onload = function() {
-        if (imagePath) {
-          img.classList.remove('hidden');
-          if (placeholder) placeholder.classList.add('hidden');
-        }
+      img.onload = function () {
+        img.classList.remove('hidden');
+        if (placeholder) placeholder.classList.add('hidden');
       };
     }
-    if (placeholder) placeholder.classList.toggle('hidden', !!getMarketDisplayImage(model.item));
+    if (placeholder) placeholder.classList.toggle('hidden', !!resolvedItemImageUrl);
     if (nameEl) nameEl.textContent = model.item.name;
     if (categoryEl) categoryEl.textContent = model.item.category.replace(/_/g, ' ');
     if (updatedEl) {
@@ -3168,7 +4482,7 @@
       return;
     }
 
-    var rows = model.recentClosed.map(function(entry) {
+    var rows = model.recentClosed.map(function (entry) {
       var low = isFinite(Number(entry.min_price)) ? Number(entry.min_price) : null;
       var high = isFinite(Number(entry.max_price)) ? Number(entry.max_price) : null;
       return [
@@ -3584,8 +4898,8 @@
       actionBtn.className = 'btn btn-secondary order-action-btn';
       actionBtn.type = 'button';
       actionBtn.textContent = type === 'sell' ? 'Buy' : 'Sell';
-      actionBtn.addEventListener('click', function(order, orderType, orderItemName) {
-        return function(event) {
+      actionBtn.addEventListener('click', function (order, orderType, orderItemName) {
+        return function (event) {
           event.stopPropagation();
           copyWhisper(order, orderType, orderItemName);
         };
@@ -3666,6 +4980,7 @@
   function resetContractsFilters(nextType) {
     contractsFilters = createDefaultContractsFilters(nextType || contractsFilters.type);
     contractsResults = [];
+    contractsCoverageNote = '';
     contractsError = '';
     contractsHasSearched = false;
     contractsVisibleCount = CONTRACT_RESULTS_BATCH_SIZE;
@@ -3709,6 +5024,7 @@
     if (target.id === 'contracts-weapon-select') {
       contractsFilters.weaponUrlName = target.value;
       contractsResults = [];
+      contractsCoverageNote = '';
       contractsError = '';
       contractsHasSearched = false;
       contractsVisibleCount = CONTRACT_RESULTS_BATCH_SIZE;
@@ -3724,6 +5040,7 @@
       var index = Number(String(target.id).slice(-1));
       contractsFilters.positiveStats[index] = target.value;
       contractsResults = [];
+      contractsCoverageNote = '';
       contractsError = '';
       contractsHasSearched = false;
       contractsVisibleCount = CONTRACT_RESULTS_BATCH_SIZE;
@@ -3734,6 +5051,7 @@
     if (target.id === 'contracts-negative-select') {
       contractsFilters.negativeStat = target.value;
       contractsResults = [];
+      contractsCoverageNote = '';
       contractsError = '';
       contractsHasSearched = false;
       contractsVisibleCount = CONTRACT_RESULTS_BATCH_SIZE;
@@ -3744,6 +5062,7 @@
     if (target.id === 'contracts-rank-select') {
       contractsFilters.modRank = target.value || 'any';
       contractsResults = [];
+      contractsCoverageNote = '';
       contractsError = '';
       contractsHasSearched = false;
       contractsVisibleCount = CONTRACT_RESULTS_BATCH_SIZE;
@@ -3754,6 +5073,7 @@
     if (target.id === 'contracts-element-select') {
       contractsFilters.element = target.value;
       contractsResults = [];
+      contractsCoverageNote = '';
       contractsError = '';
       contractsHasSearched = false;
       contractsVisibleCount = CONTRACT_RESULTS_BATCH_SIZE;
@@ -3770,6 +5090,7 @@
     if (target.id === 'contracts-ephemera-select') {
       contractsFilters.ephemera = target.value;
       contractsResults = [];
+      contractsCoverageNote = '';
       contractsError = '';
       contractsHasSearched = false;
       contractsVisibleCount = CONTRACT_RESULTS_BATCH_SIZE;
@@ -3813,7 +5134,7 @@
     if (!wfmSession.token) return;
 
     if (wfmSocket) {
-      try { wfmSocket.close(); } catch(e) {}
+      try { wfmSocket.close(); } catch (e) { }
       wfmSocket = null;
     }
 
@@ -3822,27 +5143,27 @@
       return;
     }
 
-    window.electronAPI.wfmSetCookie(wfmSession.token).then(function(res) {
+    window.electronAPI.wfmSetCookie(wfmSession.token).then(function (res) {
       try {
         console.log('Connecting WFM WebSocket...');
         wfmSocket = new WebSocket('wss://warframe.market/socket?platform=pc');
 
-        wfmSocket.addEventListener('open', function() {
+        wfmSocket.addEventListener('open', function () {
           console.log('WFM WebSocket connected.');
           sendWfmSocketStatus(wfmSocketStatus);
         });
 
-        wfmSocket.addEventListener('message', function(event) {
+        wfmSocket.addEventListener('message', function (event) {
           try {
             var msg = JSON.parse(event.data);
             if (msg.type === '@WS/USER/SET_STATUS' && msg.payload) {
               wfmSocketStatus = msg.payload;
               updateStatusSelectorUI();
             }
-          } catch(e) {}
+          } catch (e) { }
         });
 
-        wfmSocket.addEventListener('close', function() {
+        wfmSocket.addEventListener('close', function () {
           console.log('WFM WebSocket closed.');
           wfmSocket = null;
           if (wfmSession.token) {
@@ -3850,13 +5171,13 @@
           }
         });
 
-        wfmSocket.addEventListener('error', function(err) {
+        wfmSocket.addEventListener('error', function (err) {
           console.error('WFM WebSocket error:', err);
         });
       } catch (err) {
         console.error('Failed to create WFM WebSocket:', err);
       }
-    }).catch(function(err) {
+    }).catch(function (err) {
       console.error('Failed to set session cookie:', err);
     });
   }
@@ -3891,7 +5212,7 @@
 
   function disconnectWfmSocket() {
     if (wfmSocket) {
-      try { wfmSocket.close(); } catch(e) {}
+      try { wfmSocket.close(); } catch (e) { }
       wfmSocket = null;
     }
   }
@@ -3921,15 +5242,42 @@
   async function verifyWfmToken(token) {
     var cleanToken = token.trim();
     var authHeader = cleanToken.startsWith('JWT ') ? cleanToken : 'JWT ' + cleanToken;
-    var json = await wfmFetch('https://api.warframe.market/v1/profile', {
+    var json = await wfmFetch('https://api.warframe.market/v2/me', {
       headers: {
         'Authorization': authHeader
       }
     });
-    if (!json || !json.payload || !json.payload.user) {
+    if (!json || !json.data) {
       throw new Error('Invalid response payload');
     }
-    return json.payload.user;
+    return json.data;
+  }
+
+  /**
+   * Take an already-verified session: store it, refresh the header, open the
+   * socket and report success.
+   *
+   * Split out of connectWfmWithToken so the browser login, which the main
+   * process has already verified against /v2/me, does not have to be verified a
+   * second time over a path that can fail after the login window is gone.
+   */
+  function adoptWfmSession(token, user) {
+    wfmSession.token = String(token || '').startsWith('JWT ') ? String(token).trim() : 'JWT ' + String(token || '').trim();
+    wfmSession.user = user || null;
+    localStorage.setItem('wfm_jwt_token', wfmSession.token);
+    localStorage.setItem('wfm_user_info', JSON.stringify(user || null));
+
+    updateWfmHeaderUI();
+    connectWfmSocket();
+
+    var statusEl = $('#wfm-login-status');
+    if (statusEl) {
+      statusEl.className = 'wfm-login-status success';
+      var label = (user && (user.ingameName || user.ingame_name)) || 'your account';
+      statusEl.textContent = 'Connected as ' + label + '!';
+    }
+    setTimeout(closeWfmLoginModal, 1200);
+    return true;
   }
 
   async function connectWfmWithToken(token) {
@@ -3941,20 +5289,7 @@
 
     try {
       var user = await verifyWfmToken(token);
-      wfmSession.token = token.startsWith('JWT ') ? token.trim() : 'JWT ' + token.trim();
-      wfmSession.user = user;
-      localStorage.setItem('wfm_jwt_token', wfmSession.token);
-      localStorage.setItem('wfm_user_info', JSON.stringify(user));
-
-      updateWfmHeaderUI();
-      connectWfmSocket();
-
-      if (statusEl) {
-        statusEl.className = 'wfm-login-status success';
-        statusEl.textContent = 'Connected as ' + user.ingame_name + '!';
-      }
-      setTimeout(closeWfmLoginModal, 1200);
-      return true;
+      return adoptWfmSession(token, user);
     } catch (err) {
       if (statusEl) {
         statusEl.className = 'wfm-login-status error';
@@ -3982,20 +5317,7 @@
         throw new Error(res.message || 'Signin failed.');
       }
 
-      wfmSession.token = res.token;
-      wfmSession.user = res.user;
-      localStorage.setItem('wfm_jwt_token', wfmSession.token);
-      localStorage.setItem('wfm_user_info', JSON.stringify(res.user));
-
-      updateWfmHeaderUI();
-      connectWfmSocket();
-
-      if (statusEl) {
-        statusEl.className = 'wfm-login-status success';
-        statusEl.textContent = 'Signed in as ' + res.user.ingame_name + '!';
-      }
-      setTimeout(closeWfmLoginModal, 1200);
-      return true;
+      return adoptWfmSession(res.token, res.user);
     } catch (err) {
       if (statusEl) {
         statusEl.className = 'wfm-login-status error';
@@ -4060,7 +5382,7 @@
           msg = errBody.error.request.join(', ');
         } else if (errBody.error.inputs) {
           var inputs = errBody.error.inputs;
-          msg = Object.keys(inputs).map(function(k) { return k + ': ' + inputs[k]; }).join('; ');
+          msg = Object.keys(inputs).map(function (k) { return k + ': ' + inputs[k]; }).join('; ');
         }
       }
       throw new Error(msg);
@@ -4078,6 +5400,12 @@
   function closeWfmLoginModal() {
     var modal = $('#wfm-login-modal');
     if (modal) modal.classList.add('hidden');
+    // Also tear down the browser login window. Without this, dismissing the
+    // modal left the Warframe Market window sitting on screen with no way to
+    // close it from the app.
+    if (window.electronAPI && typeof window.electronAPI.wfmLoginCancel === 'function') {
+      window.electronAPI.wfmLoginCancel().catch(function () {});
+    }
   }
 
   async function wfmCreateOrder(itemId, type, platinum, quantity, visible, extraParams) {
@@ -4143,7 +5471,7 @@
     var activeMyOrders = [];
     if (username) {
       var allOrders = [].concat(sellOrders || [], buyOrders || []);
-      activeMyOrders = allOrders.filter(function(o) {
+      activeMyOrders = allOrders.filter(function (o) {
         return o.user && o.user.ingame_name && o.user.ingame_name.toLowerCase() === username;
       });
     }
@@ -4179,8 +5507,8 @@
         toggleBtn.className = 'btn-icon-only';
         toggleBtn.title = o.visible !== false ? 'Hide listing' : 'Show listing';
         toggleBtn.innerHTML = o.visible !== false ? '<span class="material-icons-round">visibility_off</span>' : '<span class="material-icons-round">visibility</span>';
-        toggleBtn.addEventListener('click', function(order) {
-          return async function(e) {
+        toggleBtn.addEventListener('click', function (order) {
+          return async function (e) {
             e.stopPropagation();
             try {
               var extra = (showRankColumn && order.rank !== null) ? { rank: order.rank } : null;
@@ -4198,8 +5526,8 @@
         deleteBtn.className = 'btn-icon-only delete';
         deleteBtn.title = 'Delete listing';
         deleteBtn.innerHTML = '<span class="material-icons-round">delete</span>';
-        deleteBtn.addEventListener('click', function(order) {
-          return async function(e) {
+        deleteBtn.addEventListener('click', function (order) {
+          return async function (e) {
             e.stopPropagation();
             if (!confirm('Delete this listing?')) return;
             try {
@@ -4272,7 +5600,7 @@
     btnSubmit.type = 'button';
     btnSubmit.className = 'btn btn-primary';
     btnSubmit.textContent = 'Post Order';
-    btnSubmit.addEventListener('click', async function() {
+    btnSubmit.addEventListener('click', async function () {
       var typeVal = selectType.value;
       var priceVal = Number(inputPrice.value);
       var qtyVal = Number(inputQty.value);
@@ -4367,7 +5695,7 @@
 
     if (!searchInput || !suggestionsDiv || !submitBtn) return;
 
-    searchInput.addEventListener('input', function() {
+    searchInput.addEventListener('input', function () {
       var query = String(searchInput.value || '').trim().toLowerCase();
       if (!query || !marketItems) {
         suggestionsDiv.innerHTML = '';
@@ -4375,7 +5703,7 @@
         return;
       }
 
-      var matches = marketItems.filter(function(item) {
+      var matches = marketItems.filter(function (item) {
         return item.name && item.name.toLowerCase().includes(query);
       }).slice(0, 10);
 
@@ -4383,7 +5711,7 @@
         suggestionsDiv.innerHTML = '<div style="padding: 10px; color: var(--text-dim); font-size: 13px;">No items found</div>';
       } else {
         suggestionsDiv.innerHTML = '';
-        matches.forEach(function(item) {
+        matches.forEach(function (item) {
           var div = document.createElement('div');
           div.style.padding = '8px 12px';
           div.style.cursor = 'pointer';
@@ -4391,7 +5719,7 @@
           div.style.borderBottom = '1px solid rgba(255,255,255,0.02)';
           div.className = 'suggestion-item';
           div.textContent = item.name;
-          div.addEventListener('click', function() {
+          div.addEventListener('click', function () {
             searchInput.value = item.name;
             selectedAddItem = item;
             suggestionsDiv.classList.add('hidden');
@@ -4409,13 +5737,13 @@
       suggestionsDiv.classList.remove('hidden');
     });
 
-    document.addEventListener('click', function(e) {
+    document.addEventListener('click', function (e) {
       if (e.target !== searchInput && e.target !== suggestionsDiv) {
         suggestionsDiv.classList.add('hidden');
       }
     });
 
-    submitBtn.addEventListener('click', async function() {
+    submitBtn.addEventListener('click', async function () {
       if (!selectedAddItem || searchInput.value !== selectedAddItem.name) {
         alert('Please select a valid item from the suggestions dropdown list.');
         return;
@@ -4493,7 +5821,7 @@
       var json = await wfmFetch('https://api.warframe.market/v2/orders/my');
       var orders = json.data || [];
 
-      orders.sort(function(a, b) {
+      orders.sort(function (a, b) {
         var typeA = a.type || a.order_type || '';
         var typeB = b.type || b.order_type || '';
         if (typeA !== typeB) {
@@ -4515,6 +5843,23 @@
       }
 
       listContainer.innerHTML = '';
+
+      // A listing table is short, so resolve any wiki-only art (mod effect names,
+      // weapon parts) before rendering rather than patching images in afterwards.
+      var orderImageNames = [];
+      for (var n = 0; n < orders.length; n++) {
+        var nameForImage = '';
+        if (orders[n].item && typeof orders[n].item === 'object') {
+          var enForImage = orders[n].item.i18n && orders[n].item.i18n.en ? orders[n].item.i18n.en : null;
+          nameForImage = orders[n].item.name || (enForImage && enForImage.name) || '';
+        }
+        if (!nameForImage) {
+          var looked = findMarketItemById(orders[n].itemId || (orders[n].item && orders[n].item.id) || orders[n].item);
+          if (looked) nameForImage = looked.name || '';
+        }
+        if (nameForImage) orderImageNames.push(nameForImage);
+      }
+      var preResolvedOrderImages = await resolveWikiImagesForNames(orderImageNames);
 
       var tableContainer = document.createElement('div');
       tableContainer.className = 'my-orders-table-container';
@@ -4552,15 +5897,40 @@
         var itemWrap = document.createElement('div');
         itemWrap.className = 'my-orders-item-cell';
 
+        // An <img> with an empty src renders Chromium's broken-image symbol, so only
+        // insert one when a source actually resolved. The order can still name the item
+        // even when the catalogue lookup missed, so fall back to that for the image.
+        var orderImageItem = item;
+        if (!orderImageItem && o.item && typeof o.item === 'object') {
+          var orderItemEn = o.item.i18n && o.item.i18n.en ? o.item.i18n.en : null;
+          var orderItemName = o.item.name || (orderItemEn && orderItemEn.name) || '';
+          if (orderItemName) orderImageItem = { name: orderItemName };
+        }
+
         var img = document.createElement('img');
         img.className = 'my-orders-item-img';
-        img.src = item ? getMarketImageUrl(getMarketDisplayImage(item)) : '';
         img.alt = item ? item.name : 'Unknown Item';
+
+        var orderImageName = orderImageItem ? orderImageItem.name : '';
+        // Resolved before the table is built, so the row renders once with a final
+        // URL instead of flashing an empty cell and patching it in later.
+        var orderImageUrl = preResolvedOrderImages[orderImageName] || getMarketItemImageUrl(orderImageItem);
+        if (orderImageUrl) {
+          img.src = orderImageUrl;
+          // WFM's asset host can refuse the image outright; drop the element rather
+          // than leaving Chromium's broken-image symbol sitting in the table.
+          img.addEventListener('error', function () {
+            // Hide rather than remove, so the wiki fallback can still revive this
+            // element. Never leave a broken-image symbol in the table.
+            img.style.display = 'none';
+            upgradeMarketImageFromWiki(img, orderImageName);
+          });
+          itemWrap.appendChild(img);
+          labelMarketImageFallback(img, orderImageItem);        }
 
         var nameSpan = document.createElement('span');
         nameSpan.textContent = item ? item.name : 'Unknown Item';
 
-        itemWrap.appendChild(img);
         itemWrap.appendChild(nameSpan);
         tdItem.appendChild(itemWrap);
         tr.appendChild(tdItem);
@@ -4612,8 +5982,8 @@
         btnUpdate.className = 'btn-icon-only';
         btnUpdate.title = 'Save Changes';
         btnUpdate.innerHTML = '<span class="material-icons-round">save</span>';
-        btnUpdate.addEventListener('click', function(orderId, typeVal, pInp, qInp, visVal, rVal) {
-          return async function(e) {
+        btnUpdate.addEventListener('click', function (orderId, typeVal, pInp, qInp, visVal, rVal) {
+          return async function (e) {
             e.stopPropagation();
             var newPlat = Number(pInp.value);
             var newQty = Number(qInp.value);
@@ -4637,8 +6007,8 @@
         btnToggle.className = 'btn-icon-only';
         btnToggle.title = oVisible ? 'Hide Listing' : 'Show Listing';
         btnToggle.innerHTML = oVisible ? '<span class="material-icons-round">visibility_off</span>' : '<span class="material-icons-round">visibility</span>';
-        btnToggle.addEventListener('click', function(orderId, platVal, qtyVal, visVal, rVal) {
-          return async function(e) {
+        btnToggle.addEventListener('click', function (orderId, platVal, qtyVal, visVal, rVal) {
+          return async function (e) {
             e.stopPropagation();
             try {
               var extra = rVal !== null ? { rank: rVal } : null;
@@ -4656,8 +6026,8 @@
         btnDelete.className = 'btn-icon-only delete';
         btnDelete.title = 'Delete Listing';
         btnDelete.innerHTML = '<span class="material-icons-round">delete</span>';
-        btnDelete.addEventListener('click', function(orderId) {
-          return async function(e) {
+        btnDelete.addEventListener('click', function (orderId) {
+          return async function (e) {
             e.stopPropagation();
             if (!confirm('Are you sure you want to delete this listing?')) return;
             try {
@@ -4799,7 +6169,7 @@
     if (connectBtn) {
       connectBtn.addEventListener('click', openWfmLoginModal);
     }
-    
+
     var disconnectBtn = $('#market-disconnect-btn');
     if (disconnectBtn) {
       disconnectBtn.addEventListener('click', disconnectWfm);
@@ -4807,7 +6177,7 @@
 
     var statusSelect = $('#wfm-status-select');
     if (statusSelect) {
-      statusSelect.addEventListener('change', function() {
+      statusSelect.addEventListener('change', function () {
         sendWfmSocketStatus(statusSelect.value);
       });
     }
@@ -4824,13 +6194,13 @@
     var tabCredContent = $('#wfm-tab-credentials-content');
 
     if (tabJwtBtn && tabCredBtn && tabJwtContent && tabCredContent) {
-      tabJwtBtn.addEventListener('click', function() {
+      tabJwtBtn.addEventListener('click', function () {
         tabJwtBtn.classList.add('active');
         tabCredBtn.classList.remove('active');
         tabJwtContent.classList.remove('hidden');
         tabCredContent.classList.add('hidden');
       });
-      tabCredBtn.addEventListener('click', function() {
+      tabCredBtn.addEventListener('click', function () {
         tabCredBtn.classList.add('active');
         tabJwtBtn.classList.remove('active');
         tabCredContent.classList.remove('hidden');
@@ -4841,7 +6211,7 @@
     // Modal Form Submits
     var submitJwtBtn = $('#wfm-submit-jwt');
     if (submitJwtBtn) {
-      submitJwtBtn.addEventListener('click', function() {
+      submitJwtBtn.addEventListener('click', function () {
         var jwtInput = $('#wfm-jwt-input');
         var token = jwtInput ? String(jwtInput.value || '').trim() : '';
         if (!token) {
@@ -4854,7 +6224,7 @@
 
     var submitCredBtn = $('#wfm-submit-credentials');
     if (submitCredBtn) {
-      submitCredBtn.addEventListener('click', function() {
+      submitCredBtn.addEventListener('click', function () {
         var emailInput = $('#wfm-email-input');
         var passInput = $('#wfm-password-input');
         var email = emailInput ? String(emailInput.value || '').trim() : '';
@@ -4866,19 +6236,186 @@
         connectWfmWithCredentials(email, pass);
       });
     }
+    // Modal Form Submits
+    var submitJwtBtn = $('#wfm-submit-jwt');
+    if (submitJwtBtn) {
+      submitJwtBtn.addEventListener('click', function () {
+        var jwtInput = $('#wfm-jwt-input');
+        var token = jwtInput ? String(jwtInput.value || '').trim() : '';
+        if (!token) {
+          alert('Please enter a JWT token.');
+          return;
+        }
+        connectWfmWithToken(token);
+      });
+    }
+
+    var submitCredBtn = $('#wfm-submit-credentials');
+    if (submitCredBtn) {
+      submitCredBtn.addEventListener('click', function () {
+        var emailInput = $('#wfm-email-input');
+        var passInput = $('#wfm-password-input');
+        var email = emailInput ? String(emailInput.value || '').trim() : '';
+        var pass = passInput ? String(passInput.value || '') : '';
+        if (!email || !pass) {
+          alert('Please enter both email and password.');
+          return;
+        }
+        connectWfmWithCredentials(email, pass);
+      });
+    }
+    var browserLoginBtn = $('#wfm-browser-login');
+    if (browserLoginBtn) {
+      // Recoverable failures no longer end this call, so the main process pushes
+      // progress here. Without this the panel would sit on "Opening..." forever
+      // while the login window waited for a retry.
+      if (window.electronAPI && typeof window.electronAPI.onWfmLoginStatus === 'function') {
+        window.electronAPI.onWfmLoginStatus(function (payload) {
+          var el = $('#wfm-login-status');
+          if (!el || !payload) return;
+          el.className = 'wfm-login-status error';
+          el.textContent = payload.message || 'Login did not complete.';
+        });
+      }
+
+      browserLoginBtn.addEventListener('click', async function () {
+        var statusEl = $('#wfm-login-status');
+        if (statusEl) {
+          statusEl.className = 'wfm-login-status loading';
+          statusEl.textContent = 'Opening Warframe Market login...';
+        }
+
+        try {
+          var res = await window.electronAPI.wfmLoginBrowser();
+          if (!res.ok) {
+            throw new Error(res.message || 'Browser login failed.');
+          }
+          // The main process has already confirmed the token against /v2/me, so
+          // the session is known good here. Re-verifying it in the renderer only
+          // added a second failure point after the login window had closed.
+          adoptWfmSession(res.token, res.user);
+        } catch (err) {
+          if (statusEl) {
+            statusEl.className = 'wfm-login-status error';
+            statusEl.textContent = 'Failed: ' + err.message;
+          }
+        }
+      });
+    }
 
     // WFM My Orders button toggle
     var myOrdersBtn = $('#market-my-orders-btn');
     if (myOrdersBtn) {
-      myOrdersBtn.addEventListener('click', function() {
+      myOrdersBtn.addEventListener('click', function () {
         setMarketViewMode(marketViewMode === 'my_orders' ? 'items' : 'my_orders');
       });
     }
 
-    // Initialize session from storage
-    initWfmSession();
+// Initialize session from storage
+     initWfmSession();
 
-    renderMarketViewState();
+     renderMarketViewState();
+
+     // Filter button UI update function
+     function updateFilterButtonUI() {
+       var ownedBtn = document.getElementById('filter-owned');
+       if (ownedBtn) ownedBtn.classList.toggle('active', showOwnedOnly);
+       var notOwnedBtn = document.getElementById('filter-not-owned');
+       if (notOwnedBtn) notOwnedBtn.classList.toggle('active', showNotOwnedOnly);
+       var vaultedBtn = document.getElementById('filter-vaulted');
+       if (vaultedBtn) vaultedBtn.classList.toggle('active', showVaultedOnly);
+       var activeBtn = document.getElementById('filter-active');
+       if (activeBtn) activeBtn.classList.toggle('active', showActiveOnly);
+     }
+
+     // Setup filter button listeners
+     function setupFilterButtons() {
+       // Owned filter
+       var ownedBtn = document.getElementById('filter-owned');
+       if (ownedBtn) {
+         ownedBtn.addEventListener('click', function() {
+           showOwnedOnly = !showOwnedOnly;
+           saveMarketFilterState();
+           applyMarketFilters();
+           updateFilterButtonUI();
+         });
+       }
+       // Not Owned filter
+       var notOwnedBtn = document.getElementById('filter-not-owned');
+       if (notOwnedBtn) {
+         notOwnedBtn.addEventListener('click', function() {
+           showNotOwnedOnly = !showNotOwnedOnly;
+           saveMarketFilterState();
+           applyMarketFilters();
+           updateFilterButtonUI();
+         });
+       }
+       // Vaulted filter
+       var vaultedBtn = document.getElementById('filter-vaulted');
+       if (vaultedBtn) {
+         vaultedBtn.addEventListener('click', function() {
+           showVaultedOnly = !showVaultedOnly;
+           saveMarketFilterState();
+           applyMarketFilters();
+           updateFilterButtonUI();
+         });
+       }
+       // Active filter
+       var activeBtn = document.getElementById('filter-active');
+       if (activeBtn) {
+         activeBtn.addEventListener('click', function() {
+           showActiveOnly = !showActiveOnly;
+           saveMarketFilterState();
+           applyMarketFilters();
+           updateFilterButtonUI();
+         });
+       }
+
+       // Set initial button states based on loaded filter state
+       updateFilterButtonUI();
+     }
+
+     // Check if DOM is ready
+     if (document.readyState === 'loading') {
+       document.addEventListener('DOMContentLoaded', setupFilterButtons);
+     } else {
+       setupFilterButtons();
+     }
+  }
+
+  // Safety net for images that fail to load.
+  //
+  // Most render sites attach their own error handler, but a few do not, and an
+  // <img> that 404s with no handler leaves Chromium's broken-image symbol in the
+  // layout. That is not hypothetical: the analytics panel's default picks include
+  // Arcane Energize and Arcane Grace, whose catalogue image names resolve to CDN
+  // objects that return 404.
+  //
+  // This runs in the capture phase on the document so it also sees events from
+  // images that have no handler of their own, and it only acts when the element
+  // is still visible, so a site that already cleaned itself up is left alone.
+  if (typeof document !== 'undefined' && !document.__imageErrorNetInstalled) {
+    document.__imageErrorNetInstalled = true;
+    document.addEventListener(
+      'error',
+      function (event) {
+        var target = event.target;
+        if (!target || target.tagName !== 'IMG') return;
+        if (target.style && target.style.display === 'none') return;
+        if (target.dataset && target.dataset.wfmFallbackTried) return;
+        target.dataset.wfmFallbackTried = '1';
+        // Prefer reviving from the wiki, which is how the rest of the market code
+        // recovers a refused WFM asset host.
+        try {
+          if (typeof upgradeMarketImageFromWiki === 'function' && target.alt) {
+            upgradeMarketImageFromWiki(target, target.alt);
+            return;
+          }
+        } catch (e) { /* fall through to hiding */ }
+        target.style.display = 'none';
+      },
+      true
+    );
   }
 
   // Expose globally
@@ -4888,6 +6425,7 @@
     loadAnalytics: loadTradeAnalytics,
     openItemByName: openItemByName,
     searchItemByName: searchItemByName,
+    openPartOrdersByName: openPartOrdersByName,
     getRelicRewardOverlayPrices: getRelicRewardOverlayPrices,
     warmRelicRewardOverlay: warmRelicRewardOverlay,
     showContracts: function () {

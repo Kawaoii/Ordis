@@ -4,7 +4,7 @@
       <img src="assets/icon.png" alt="Warframe Companion App Icon" width="82" height="82" />
     </td>
     <td valign="top">
-      <h1>Warframe Companion App</h1>
+      <h1>Ordis</h1>
       <p>
         A complete free and open source program to track your mastery and see what is tradable or not with many
         feature all in one app.
@@ -14,12 +14,23 @@
 </table>
 
 <p>
-  <a href="https://github.com/Hasan580/Warframe-companion-app">Repository</a> |
+  <a href="https://github.com/Kawaoii/Ordis">Repository</a> |
+  <a href="https://github.com/Kawaoii/Ordis/issues">Report an Issue</a> |
   <a href="#features">Features</a> |
   <a href="#installation">Installation</a> |
   <a href="#build-and-release">Build and Release</a> |
   <a href="./CONTRIBUTING.md">Contributing</a>
 </p>
+
+> [!IMPORTANT]
+> **Ordis is an unofficial fan fork.**
+>
+> It is based on [Warframe Companion App](https://github.com/Hasan580/Warframe-companion-app)
+> by **Hassan F.**, released under an MIT-Style License With Repository Attribution, which
+> requires visible attribution to the original project.
+>
+> All original credit for the base project goes to Hassan F. This fork is maintained
+> independently and is **not affiliated with or endorsed by Digital Extremes**.
 
 ## Overview
 
@@ -113,9 +124,20 @@ Please follow the guidelines in [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
 
 ## Disclaimer
 
-This is a community-built companion application and is not an official Digital Extremes product.
-Warframe and related names are trademarks of Digital Extremes Ltd.
+Ordis is a community-built, unofficial fan project. It is not affiliated with, sponsored by,
+or endorsed by Digital Extremes. Warframe, Ordis, and related names are trademarks of
+Digital Extremes Ltd. No affiliation or endorsement is implied.
+
+Data is supplied by community APIs including [WarframeStat](https://github.com/WFCD) and
+[warframe.market](https://warframe.market). Use them at your own risk and respect their terms.
 
 ## License
 
-This project is licensed under the [MIT License](./LICENSE).
+This project is a fork of [Warframe Companion App](https://github.com/Hasan580/Warframe-companion-app)
+by **Hassan F.**, distributed under an
+[MIT-Style License With Repository Attribution](./LICENSE).
+
+That licence permits redistribution and modification, provided visible attribution to the
+original repository is given. This fork retains that requirement: the original copyright
+notice, licence text, and attribution are preserved in this README, in the in-app Settings
+footer, and in the release notes. The upstream `LICENSE` file is left unmodified.

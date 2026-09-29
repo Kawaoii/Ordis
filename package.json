@@ -1,17 +1,18 @@
 {
   "name": "warframe-companion-app",
   "version": "1.9.1",
-  "description": "Warframe Companion App - Mastery Rank Checklist & Calculator",
+  "description": "Ordis - unofficial Warframe companion app for tracking progress and navigating game content. Based on Warframe Companion App by Hassan F.",
   "main": "main.js",
   "scripts": {
     "dev": "electron .",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
-    "build:linux": "electron-builder --linux AppImage",
+    "build:linux": "electron-builder --linux AppImage pacman",
     "build:mac": "electron-builder --mac dmg zip",
-    "package": "electron-builder --win --dir"
+    "package": "electron-builder --win --dir",
+    "verify:riven-bases": "node verify-riven-bases.js"
   },
-  "author": "Hassan",
+  "author": "Kawaoii",
   "license": "SEE LICENSE IN LICENSE",
   "type": "commonjs",
   "devDependencies": {
@@ -23,27 +24,28 @@
     "tesseract.js": "^7.0.0"
   },
   "build": {
-    "appId": "com.warframe.companion",
-    "productName": "Warframe Companion App",
+    "appId": "io.github.kawaoii.ordis",
+    "productName": "Ordis",
     "asar": true,
     "win": {
       "target": "nsis",
       "icon": "assets/icon.png",
-      "artifactName": "Warframe-Companion-App-Setup-${version}.${ext}"
+      "artifactName": "Ordis-Setup-${version}.${ext}"
     },
     "linux": {
       "target": [
-        "AppImage"
+        "AppImage",
+        "pacman"
       ],
-      "artifactName": "Warframe-Companion-App-${version}-${arch}.${ext}",
+      "artifactName": "Ordis-${version}-${arch}.${ext}",
       "category": "Utility"
     },
     "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "artifactName": "Warframe-Companion-App-${version}-${arch}.${ext}"
+        "target": [
+          "dmg",
+          "zip"
+        ],
+        "artifactName": "Ordis-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -52,20 +54,30 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "Hasan580",
-        "repo": "Warframe-companion-app"
+        "owner": "Kawaoii",
+        "repo": "Ordis"
       }
     ],
-    "files": [
-      "main.js",
-      "preload.js",
-      "relic-overlay.html",
-      "index.html",
-      "styles.css",
-      "renderer.js",
-      "market.js",
-      "starchart.js",
-      "assets/**/*"
-    ]
+      "files": [
+        "main.js",
+        "preload.js",
+        "relic-overlay.html",
+        "riven-overlay.html",
+        "riven-overlay-dashboard.html",
+        "index.html",
+        "styles.css",
+        "ordis-design.css",
+        "renderer.js",
+        "dock.js",
+        "market.js",
+        "wfm-contracts.js",
+        "starchart.js",
+        "riven-data.js",
+        "riven-parser.js",
+        "assets/**/*"
+      ]
+  },
+  "allowScripts": {
+    "electron@41.0.3": true
   }
 }

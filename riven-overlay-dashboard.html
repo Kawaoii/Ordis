@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Riven Overlay Progress Dashboard</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+:root {
+  --bg-primary: #0a0b0d;
+  --bg-secondary: #141619;
+  --bg-tertiary: #1c1e23;
+  --text-primary: #e4e6ea;
+  --text-secondary: #a8abb2;
+  --text-muted: #6b7280;
+  --accent-blue: #4f9eff;
+  --accent-teal: #00d4aa;
+  --accent-orange: #ff8c42;
+  --accent-red: #ff4757;
+  --accent-green: #2ed573;
+  --accent-purple: #a55eea;
+  --border: #2a2d35;
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8fafc;
+    --bg-tertiary: #f1f5f9;
+    --text-primary: #1e293b;
+    --text-secondary: #475569;
+    --text-muted: #64748b;
+    --border: #e2e8f0;
+    --shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    color-scheme: light;
+  }
+}
+
+:root[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8fafc;
+  --bg-tertiary: #f1f5f9;
+  --text-primary: #1e293b;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --border: #e2e8f0;
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  margin: 0;
+  padding: 24px;
+  line-height: 1.6;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 48px;
+}
+
+.title {
+  font-size: 36px;
+  font-weight: 700;
+  margin: 0 0 8px 0;
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-teal));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.subtitle {
+  font-size: 18px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: var(--shadow);
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.phase-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.phase-badge.complete {
+  background: rgba(46, 213, 115, 0.15);
+  color: var(--accent-green);
+}
+
+.phase-badge.active {
+  background: rgba(79, 158, 255, 0.15);
+  color: var(--accent-blue);
+}
+
+.phase-badge.pending {
+  background: rgba(168, 171, 178, 0.15);
+  color: var(--text-muted);
+}
+
+.card-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+  flex-grow: 1;
+}
+
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-indicator.working {
+  background: var(--accent-green);
+  animation: pulse 2s infinite;
+}
+
+.status-indicator.testing {
+  background: var(--accent-blue);
+  animation: pulse 2s infinite;
+}
+
+.status-indicator.pending {
+  background: var(--text-muted);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.feature-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.feature-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  font-size: 14px;
+}
+
+.feature-list li::before {
+  content: "✓";
+  color: var(--accent-green);
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.feature-list li.pending::before {
+  content: "○";
+  color: var(--text-muted);
+}
+
+.code-sample {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 16px 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  overflow-x: auto;
+}
+
+.code-sample pre {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.metric {
+  text-align: center;
+  padding: 16px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+}
+
+.metric-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--accent-blue);
+  margin-bottom: 4px;
+}
+
+.metric-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.architecture-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.flow-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.flow-step .step-number {
+  background: var(--accent-blue);
+  color: white;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.ocr-samples {
+  margin-top: 16px;
+}
+
+.ocr-sample {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.ocr-sample-header {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ocr-sample-content {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+}
+
+.next-steps {
+  background: linear-gradient(135deg, rgba(79, 158, 255, 0.05), rgba(0, 212, 170, 0.05));
+  border: 1px solid rgba(79, 158, 255, 0.2);
+}
+
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 16px 0;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-blue), var(--accent-teal));
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+@media (max-width: 768px) {
+  body {
+    padding: 16px;
+  }
+
+  .title {
+    font-size: 28px;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1 class="title">Riven Overlay Progress</h1>
+  <p class="subtitle">Live Riven Grading System for Warframe Companion App</p>
+</div>
+
+<div class="grid">
+  <!-- Phase Overview -->
+  <div class="card">
+    <div class="card-header">
+      <span class="phase-badge active">Status</span>
+      <h2 class="card-title">System Overview</h2>
+      <div class="status-indicator working"></div>
+    </div>
+
+    <div class="progress-bar">
+      <div class="progress-fill" style="width: 57%"></div>
+    </div>
+
+    <div class="metrics-grid">
+      <div class="metric">
+        <div class="metric-value">4/7</div>
+        <div class="metric-label">Phases Complete</div>
+      </div>
+      <div class="metric">
+        <div class="metric-value">150ms</div>
+        <div class="metric-label">Reaction Time</div>
+      </div>
+      <div class="metric">
+        <div class="metric-value">78%</div>
+        <div class="metric-label">Crop Accuracy</div>
+      </div>
+      <div class="metric">
+        <div class="metric-value">✓</div>
+        <div class="metric-label">OCR Working</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 1-3: Complete -->
+  <div class="card">
+    <div class="card-header">
+      <span class="phase-badge complete">Phases 1-3</span>
+      <h2 class="card-title">Detection & Capture</h2>
+      <div class="status-indicator working"></div>
+    </div>
+
+    <ul class="feature-list">
+      <li>EE.log polling and riven reroll detection</li>
+      <li>Multi-display capture with manual override</li>
+      <li>Smart display fallback system</li>
+      <li>150ms reaction time (tightened from 500ms)</li>
+      <li>Theme-independent OCR preprocessing</li>
+      <li>Debug frame capture system</li>
+    </ul>
+
+    <div class="architecture-flow">
+      <div class="flow-step">
+        <div class="step-number">1</div>
+        <div>Monitor EE.log for "Are you sure you want to cycle" dialog</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-number">2</div>
+        <div>Wait 150ms for animation, then trigger screen capture</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-number">3</div>
+        <div>Crop right side (78% x-offset, 20% width) for stat cards</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-number">4</div>
+        <div>Apply grayscale + contrast enhancement for OCR</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 4: Active -->
+  <div class="card">
+    <div class="card-header">
+      <span class="phase-badge active">Phase 4</span>
+      <h2 class="card-title">OCR Text Parsing</h2>
+      <div class="status-indicator testing"></div>
+    </div>
+
+    <ul class="feature-list">
+      <li>Raw OCR text to structured data conversion</li>
+      <li>Weapon name extraction and cleaning</li>
+      <li>Stat parsing with +/- polarity detection</li>
+      <li>MR requirement extraction</li>
+      <li>Riven name suffix recognition</li>
+    </ul>
+
+    <div class="ocr-samples">
+      <div class="ocr-sample">
+        <div class="ocr-sample-header">Recent Successful Parse</div>
+        <div class="ocr-sample-content">
+Ceramic Dagger<br>
++9.45 Combo Duration<br>
+Tempi-argicta<br>
+Finisher
+        </div>
+      </div>
+      <div class="ocr-sample">
+        <div class="ocr-sample-header">Parser Output (JSON)</div>
+        <div class="ocr-sample-content" style="font-size: 12px;">
+{<br>
+&nbsp;&nbsp;"weaponName": "Ceramic Dagger",<br>
+&nbsp;&nbsp;"stats": [{<br>
+&nbsp;&nbsp;&nbsp;&nbsp;"polarity": "+",<br>
+&nbsp;&nbsp;&nbsp;&nbsp;"value": 9.45,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;"name": "Combo Duration"<br>
+&nbsp;&nbsp;}],<br>
+&nbsp;&nbsp;"rivenName": "Tempi-argicta"<br>
+}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 5: Pending -->
+  <div class="card">
+    <div class="card-header">
+      <span class="phase-badge pending">Phase 5</span>
+      <h2 class="card-title">Riven Grading Engine</h2>
+      <div class="status-indicator pending"></div>
+    </div>
+
+    <ul class="feature-list">
+      <li class="pending">Load rivenAttributes.json stat weights</li>
+      <li class="pending">Calculate disposition multipliers</li>
+      <li class="pending">Score positive vs negative stats</li>
+      <li class="pending">Apply weapon-specific bonuses</li>
+      <li class="pending">Generate S/A/B/C tier grade</li>
+    </ul>
+
+    <div class="code-sample">
+      <pre>// Example grading logic
+function gradeRiven(riven, rivenData) {
+  const weapon = rivenData.weapons[riven.weaponName];
+  let totalScore = 0;
+
+  for (const stat of riven.stats) {
+    const weight = weapon.stats[stat.name]?.weight || 1;
+    const disposition = weapon.disposition;
+    totalScore += stat.value * weight * disposition;
+  }
+
+  return scoreToGrade(totalScore); // S/A/B/C
+}</pre>
+    </div>
+  </div>
+
+  <!-- Phase 6: Pending -->
+  <div class="card">
+    <div class="card-header">
+      <span class="phase-badge pending">Phase 6</span>
+      <h2 class="card-title">Warframe Market Integration</h2>
+      <div class="status-indicator pending"></div>
+    </div>
+
+    <ul class="feature-list">
+      <li class="pending">Fetch live auction prices via WFM API</li>
+      <li class="pending">Generate listing description text</li>
+      <li class="pending">Auto-open WFM browser URL</li>
+      <li class="pending">Quick-sell workflow integration</li>
+    </ul>
+
+    <div class="code-sample">
+      <pre>// WFM API endpoints
+GET /v1/auctions/search
+POST /v1/auctions/create
+GET /v2/items/{weapon_name}/orders
+
+// Example price lookup
+const prices = await wfmFetch(
+  `/v1/auctions/search?weapon=${weapon}&stats=${statString}`
+);</pre>
+    </div>
+  </div>
+
+  <!-- Phase 7: Pending -->
+  <div class="card">
+    <div class="card-header">
+      <span class="phase-badge pending">Phase 7</span>
+      <h2 class="card-title">Overlay Display</h2>
+      <div class="status-indicator pending"></div>
+    </div>
+
+    <ul class="feature-list">
+      <li class="pending">Transparent always-on-top overlay window</li>
+      <li class="pending">Grade badge (S/A/B/C) with color coding</li>
+      <li class="pending">Live price display from WFM</li>
+      <li class="pending">Quick action buttons (list/sell)</li>
+      <li class="pending">Auto-hide after 10 seconds</li>
+    </ul>
+
+    <div class="code-sample">
+      <pre>// Overlay window config
+rivenOverlayWindow = new BrowserWindow({
+  width: 300,
+  height: 120,
+  alwaysOnTop: true,
+  transparent: true,
+  frame: false,
+  skipTaskbar: true,
+  focusable: false
+});</pre>
+    </div>
+  </div>
+
+  <!-- Architecture -->
+  <div class="card">
+    <div class="card-header">
+      <span class="phase-badge complete">Tech Stack</span>
+      <h2 class="card-title">System Architecture</h2>
+    </div>
+
+    <ul class="feature-list">
+      <li>Electron main process with IPC bridges</li>
+      <li>Tesseract.js OCR with PSM tuning</li>
+      <li>Native screen capture via desktopCapturer</li>
+      <li>File system polling for EE.log detection</li>
+      <li>Cross-platform support (Windows 11 + CachyOS)</li>
+    </ul>
+
+    <div class="code-sample">
+      <pre>Key Files Modified:
+├── main.js (+200 lines riven overlay code)
+├── preload.js (IPC bridge for riven functions)
+├── renderer.js (UI integration pending)
+└── riven_debug/ (auto-saved OCR frames)
+
+Dependencies:
+- tesseract.js (OCR engine)
+- Enhanced nativeImage processing</pre>
+    </div>
+  </div>
+
+  <!-- Current Issues & Next Steps -->
+  <div class="card next-steps">
+    <div class="card-header">
+      <span class="phase-badge active">Next Actions</span>
+      <h2 class="card-title">Immediate Tasks</h2>
+    </div>
+
+    <div class="architecture-flow">
+      <div class="flow-step">
+        <div class="step-number">1</div>
+        <div><strong>Test Phase 4:</strong> Verify OCR parser with live reroll data</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-number">2</div>
+        <div><strong>Build Phase 5:</strong> Implement riven grading algorithm</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-number">3</div>
+        <div><strong>Add Phase 6:</strong> Warframe Market API integration</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-number">4</div>
+        <div><strong>Create Phase 7:</strong> Transparent overlay window</div>
+      </div>
+    </div>
+
+    <div class="code-sample">
+      <pre>Current Session Status:
+✓ App running with Phase 4 parser integrated
+✓ Debug frames capturing stat card region correctly
+✓ OCR producing structured JSON output
+⧖ Waiting for user reroll to test parser
+→ Ready to proceed to Phase 5 (grading)</pre>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
