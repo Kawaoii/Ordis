@@ -32,6 +32,76 @@
    symmetric so nothing looks crooked.
 */
 
+/* ============================================================
+   Fonts
+   ------------------------------------------------------------
+   These have to be top-level. An earlier attempt put this block inside the
+   token rule below, which makes @font-face and a nested style rule invalid
+   nesting: the parser silently discards them, the font never registers, and
+   nothing reports an error. The only symptom is a font that quietly does not
+   apply, which is why it is worth stating here.
+
+   Michroma is bundled rather than fetched from the Google CDN. Two reasons: the
+   app should not depend on a network round-trip to look right, and a packaged
+   Electron app has no business phoning home for typography.
+
+   It ships a single weight and a very wide set, so it is used for display text
+   only - headings, labels, item names, buttons. Dense small values keep the body
+   face, because at 10-12px that width makes text measurably harder to read,
+   which is the opposite of what the top bar needs.
+
+   Licensed under the SIL Open Font License 1.1, which permits bundling and
+   redistribution. The licence text ships alongside the files.
+   ============================================================ */
+@font-face {
+  font-family: 'Michroma';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('assets/fonts/Michroma-Regular.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+                 U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193,
+                 U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Michroma';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('assets/fonts/Michroma-Regular-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+                 U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF,
+                 U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* The theme blocks in styles.css are declared as `:root[data-theme="..."]`,
+   which is specificity (0,2,0) and beats a bare `:root` no matter which file it
+   is in. Overriding a token on :root alone therefore does nothing, which is why
+   rule 4 in ARCHITECTURE.md insists on matching every theme selector. All five
+   are listed for that reason - add any new theme to this list too. */
+:root,
+:root[data-theme="wfui"],
+:root[data-theme="warframe"],
+:root[data-theme="orokin"],
+:root[data-theme="stalker"],
+:root[data-theme="lotus"] {
+  /* Symmetric rim: top edge bright, bottom edge dim. No corner asymmetry. */
+  --glass-rim: inset 0 1px 0 rgba(255, 255, 255, 0.40), inset 0 -1px 0 rgba(255, 255, 255, 0.10);
+  --glass-blur: 14px;
+  --glass-blur-strong: 18px;
+  --glass-saturate: 190%;
+  --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+
+  /* One fill for the whole window. The title bar and the shell are separate
+     stacked elements, so when they were given different alphas a visible seam
+     appeared across the join. Both read this now. */
+  --shell-fill: rgba(9, 16, 23, 0.62);
+
+  --font-display: 'Michroma', 'Rajdhani', 'Segoe UI', sans-serif;
+  --font-body: 'Inter', 'Segoe UI', system-ui, sans-serif;
+}
+
 :root,
 :root[data-theme="wfui"],
 :root[data-theme="warframe"],
@@ -97,12 +167,7 @@
   --glass-tint-strong: rgba(255, 255, 255, 0.11);
   --glass-tint-card: rgba(255, 255, 255, 0.065);
   --glass-edge: rgba(255, 255, 255, 0.18);
-  /* Symmetric rim: top edge bright, bottom edge dim. No corner asymmetry. */
-  --glass-rim: inset 0 1px 0 rgba(255, 255, 255, 0.40), inset 0 -1px 0 rgba(255, 255, 255, 0.10);
-  --glass-blur: 14px;
-  --glass-blur-strong: 18px;
-  --glass-saturate: 190%;
-  --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+
 
   /* ---- Blur is opt-in, and is OFF by default ----
      This window is `transparent: true` (main.js), so every `backdrop-filter`
@@ -164,22 +229,22 @@ body {
   overflow: hidden;
   /* Hairline rim, brighter at the top like a lit glass edge. */
   border: 1px solid rgba(255, 255, 255, 0.16);
-  /* Base fill for the whole app, and the readability floor.
-     0.86 was chosen by checking how far a white desktop pixel lifts the surface
-     (about rgb(43,55,62)) and concluding that was opaque enough. That reasoning
-     is wrong: it only bounds the *background* reaching the screen, not the
-     *contrast* it carries. White text on a dark IDE is ~200 levels brighter than
-     that surface, so at 14% it stayed perfectly legible through the window - you
-     could read another application's source through the item grid. Legibility is
-     governed by the brightest thing behind the window, not the average.
+  /* Base fill for the whole app.
+     Measured: backdrop-filter is INERT in this window, not merely expensive. A
+     transparent Electron window has an empty backdrop, so there is nothing for
+     the filter to sample. Verified two ways - a CDP screenshot of an 18px probe
+     over live item art measured mean adjacent-pixel delta 20.5 with the filter
+     and 20.27 without, and an OS-level screen capture with VS Code behind the
+     app showed its source perfectly sharp through the grid. A real frosted
+     desktop is therefore not reachable while the window is transparent.
 
-     0.93 lifts a white desktop pixel only to about rgb(24,30,37), and white text
-     behind it moves the surface by ~15 levels, which is below what reads as
-     content. The desktop still shows through the rounded corners and the
-     translucent surfaces above, which is where the glass impression comes from.
-     Blur would be the other answer, but it is unsafe here: this window is
-     transparent and every backdrop-filter forces a readback of the desktop. */
-  background: rgba(9, 16, 23, 0.93) !important;
+     That leaves tint as the only lever on background legibility, so 0.62 is a
+     compromise: the desktop still reads through as colour and shape, which is
+     most of what sells glass, but a bright window behind will be noticeably
+     visible. The rim and specular highlights below carry the rest of the effect.
+     Rule 2 in ARCHITECTURE.md is kept - but its stated reason (compositor cost
+     from 121 per-image filters) is not what is actually happening here. */
+  background: var(--shell-fill) !important;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.22),
     inset 0 0 0 1px rgba(255, 255, 255, 0.04),
@@ -319,11 +384,17 @@ body {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.26),
     0 1px 0 rgba(0, 0, 0, 0.25) !important;
-  background: rgba(9, 16, 23, 0.86) !important;
 }
 
 /* The title bar and the shell share a base fill, so there must be no seam or
-   doubled border where they meet. */
+   doubled border where they meet. The comment above claimed they did, but the
+   title bar was left at 0.86 while the shell moved to 0.62 - a 24% difference
+   across a 38px strip, which is exactly the horizontal seam that was visible.
+   Both are pinned to the same token so they cannot drift apart again. */
+.titlebar {
+  background: var(--shell-fill) !important;
+}
+
 .app-container {
   border-radius: 0 0 16px 16px !important;
   border-top: 0 !important;
@@ -1941,3 +2012,160 @@ body.is-docking .dock-strip { opacity: 0.55; }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ============================================================
+   Chrome legibility, rounded fields, depth, and item art
+   ============================================================ */
+
+/* The top of the window sits over whatever is behind it, and at 0.62 fill the
+   search row and the filter pills lost their contrast against a bright window -
+   the small 11px labels were the worst affected, because thin strokes at that size
+   have the least to give. Rather than darkening the whole shell again, which is
+   what removed the glass, only the top band gets a gradient. It reads as depth
+   rather than as a panel, and the grid below keeps the see-through. */
+.market-panel::before,
+.content-topbar::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 132px;
+  pointer-events: none;
+  z-index: 0;
+  background: linear-gradient(180deg,
+      rgba(6, 11, 16, 0.82) 0%,
+      rgba(6, 11, 16, 0.58) 45%,
+      rgba(6, 11, 16, 0.22) 78%,
+      rgba(6, 11, 16, 0) 100%);
+}
+
+.content-topbar,
+.market-categories,
+.category-header {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---- Rounded fields ----
+   The market search and filter pills were already rounded; the listing form
+   inputs were not, so the two halves of the same screen did not match. */
+.search-input,
+.wfm-input,
+.my-orders-input-plat,
+.my-orders-input-qty,
+input[type="text"].wfm-input,
+input[type="number"].wfm-input,
+input[type="email"].wfm-input,
+input[type="password"].wfm-input {
+  border-radius: 12px;
+  background: rgba(6, 11, 16, 0.72);
+  border-color: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: border-color var(--transition-fast, 150ms ease),
+              box-shadow var(--transition-fast, 150ms ease);
+}
+
+.search-input:focus,
+.wfm-input:focus {
+  border-color: rgba(94, 234, 212, 0.55);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05),
+              0 0 0 3px rgba(94, 234, 212, 0.12);
+}
+
+.search-container {
+  border-radius: 14px;
+}
+
+/* ---- Depth ----
+   Soft elevation on things that sit above the glass: the search row, the filter
+   pills, the action buttons. Layered low-opacity shadows rather than a single
+   hard one, so nothing looks pasted on. */
+.content-topbar {
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.market-cat-btn {
+  border-radius: 14px;
+  background: rgba(6, 11, 16, 0.6);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition: background var(--transition-fast, 150ms ease),
+              border-color var(--transition-fast, 150ms ease),
+              color var(--transition-fast, 150ms ease);
+}
+
+.market-cat-btn:hover {
+  background: rgba(14, 24, 33, 0.78);
+}
+
+.market-cat-btn.active {
+  background: rgba(94, 234, 212, 0.14);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35),
+              inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+.market-mode-btn {
+  border-radius: 14px;
+  background: rgba(6, 11, 16, 0.6);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+.category-header {
+  background: linear-gradient(180deg, rgba(6, 11, 16, 0.55), rgba(6, 11, 16, 0.1));
+}
+
+/* ---- Item art fills its frame ----
+   The thumbnail area is 130px tall with 12px of padding and the image capped at
+   90% width, so a square icon floated in the middle of a large empty plate. Let
+   the art use the space it has; object-fit: contain keeps the aspect ratio so
+   wide items still letterbox rather than stretch. */
+.market-item-thumb {
+  padding: 6px;
+  overflow: hidden;
+}
+
+.market-item-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+}
+
+/* The plate itself should not read as a second empty window behind the art. */
+.market-item-thumb {
+  background: radial-gradient(ellipse at center, rgba(94, 234, 212, 0.05), transparent 70%);
+}
+
+/* ---- Item name presentation ----
+   Michroma is much wider than the face this replaced, so the previous 14px/0.4px
+   tracking overflowed and clipped. Sized and tracked for the new face, and given
+   a minimum two lines so a long name is not cut to three characters. */
+.market-item-name {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.35;
+  letter-spacing: 0;
+  color: var(--text-main, #eaf4f8);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  min-height: 2.7em;
+}
+
+.market-item-tag {
+  font-family: var(--font-body);
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  color: var(--text-dim);
+  opacity: 0.9;
+}
+
+/* Michroma has generous side bearings; the narrow pill buttons need the extra
+   room or the label clips. */
+  .market-cat-btn,
+  .market-mode-btn,
+  .btn {
+    font-family: var(--font-display);
+    letter-spacing: 0.2px;
+  }
+
