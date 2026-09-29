@@ -5581,6 +5581,16 @@ function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
       });
     }
 
+    // The count belongs in the heading. Without it there is no way to tell
+    // "you have no orders here" from "your orders are further down", because
+    // the heading looks the same either way.
+    var count = document.createElement('span');
+    count.className = 'wfm-section-count';
+    count.textContent = activeMyOrders.length === 1
+      ? '1 active'
+      : activeMyOrders.length + ' active';
+    title.appendChild(count);
+
     if (activeMyOrders.length > 0) {
       var list = document.createElement('div');
       list.className = 'wfm-active-orders-list';
@@ -5598,10 +5608,32 @@ function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
         badge.textContent = o.order_type;
         info.appendChild(badge);
 
-        var details = document.createElement('span');
-        var rankText = (showRankColumn && o.rank !== null && typeof o.rank !== 'undefined') ? ' (Rank ' + o.rank + ')' : '';
-        details.innerHTML = 'Price: <strong class="has-platinum-icon plat-value">' + o.platinum + ' <img class="plat-icon" src="' + PLATINUM_ICON_PATH + '"></strong>' + rankText + ' | Qty: <strong>' + (o.quantity || 1) + '</strong> | Status: <strong>' + (o.visible !== false ? 'Visible' : 'Hidden') + '</strong>';
-        info.appendChild(details);
+        // Price is the number being compared, so it is the thing that gets
+        // size. The rest was a single pipe-separated line of "Label: value"
+        // pairs, which reads as noise next to it and forces the eye to skip.
+        var price = document.createElement('span');
+        price.className = 'wfm-active-order-price';
+        price.textContent = o.platinum + 'p';
+        info.appendChild(price);
+
+        var meta = document.createElement('span');
+        meta.className = 'wfm-active-order-meta';
+        var metaBits = [];
+        if (showRankColumn && o.rank !== null && typeof o.rank !== 'undefined') {
+          metaBits.push('Rank ' + o.rank);
+        }
+        if (o.quantity > 1) metaBits.push('Qty ' + o.quantity);
+        metaBits.push(o.visible !== false ? 'Visible' : 'Hidden');
+        meta.textContent = metaBits.join('  ·  ');
+        info.appendChild(meta);
+
+        if (o.visible === false) {
+          var hiddenTag = document.createElement('span');
+          hiddenTag.className = 'wfm-active-order-hidden';
+          hiddenTag.textContent = 'Not listed on the market';
+          info.appendChild(hiddenTag);
+        }
+
         row.appendChild(info);
 
         var actions = document.createElement('div');
@@ -5609,9 +5641,11 @@ function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
 
         var toggleBtn = document.createElement('button');
         toggleBtn.type = 'button';
-        toggleBtn.className = 'btn-icon-only';
-        toggleBtn.title = o.visible !== false ? 'Hide listing' : 'Show listing';
-        toggleBtn.innerHTML = o.visible !== false ? '<span class="material-icons-round">visibility_off</span>' : '<span class="material-icons-round">visibility</span>';
+        toggleBtn.className = 'wfm-order-action';
+        toggleBtn.title = o.visible !== false ? 'Hide this listing' : 'Show this listing';
+        toggleBtn.innerHTML = o.visible !== false
+          ? '<span class="material-icons-round">visibility_off</span><span>Hide</span>'
+          : '<span class="material-icons-round">visibility</span><span>Show</span>';
         toggleBtn.addEventListener('click', function (order) {
           return async function (e) {
             e.stopPropagation();
@@ -5628,9 +5662,9 @@ function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
 
         var deleteBtn = document.createElement('button');
         deleteBtn.type = 'button';
-        deleteBtn.className = 'btn-icon-only delete';
-        deleteBtn.title = 'Delete listing';
-        deleteBtn.innerHTML = '<span class="material-icons-round">delete</span>';
+        deleteBtn.className = 'wfm-order-action is-danger';
+        deleteBtn.title = 'Delete this listing';
+        deleteBtn.innerHTML = '<span class="material-icons-round">delete</span><span>Delete</span>';
         deleteBtn.addEventListener('click', function (order) {
           return async function (e) {
             e.stopPropagation();
