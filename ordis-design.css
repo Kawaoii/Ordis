@@ -2911,3 +2911,387 @@ input[type="password"].wfm-input {
 .riven-display-select:focus {
   border-color: var(--border-accent);
 }
+
+/* ============================================================
+   Rivens tab
+   ------------------------------------------------------------
+   The panel is a list, not a grid of tiles: the thing being compared between
+   two rivens is a set of stat lines, and stat lines only line up when they
+   share a left edge. Each row is one saved riven, with the grade carried by a
+   fixed-width badge so the column of letters is something the eye can scan
+   down, which is the same reason AlecaFrame leads with the grade.
+
+   Rivens get their own accent rather than the Contracts purple: the two share
+   a family, but a saved riven and a live contract are different things and the
+   player will be switching between them.
+   ============================================================ */
+.rivens-panel {
+  /* flex: 1 to fill the workspace like every other panel. Without it the list
+     renders at its content width and the right half of the window is dead
+     space, which is how the first version of this tab shipped. */
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.rivens-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.rivens-search-container {
+  width: 260px;
+}
+
+.rivens-sort {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(6, 11, 16, 0.6);
+  border: 1px solid var(--border-color);
+}
+
+.rivens-sort-label {
+  font-family: var(--font-display);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 0 4px 0 6px;
+}
+
+.rivens-sort-btn {
+  padding: 4px 9px;
+  border-radius: 7px;
+  font-family: var(--font-body);
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.rivens-sort-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.rivens-sort-btn.is-active {
+  color: #0a1016;
+  background: rgba(94, 234, 212, 0.85);
+  border-color: rgba(94, 234, 212, 0.9);
+}
+
+.rivens-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 9px;
+  font-family: var(--font-body);
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+}
+
+.rivens-action-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.09);
+  border-color: var(--border-accent);
+}
+
+.rivens-action-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.rivens-action-btn .material-icons-round {
+  font-size: 14px;
+}
+
+.rivens-action-btn.is-primary {
+  color: #0a1016;
+  background: rgba(94, 234, 212, 0.85);
+  border-color: rgba(94, 234, 212, 0.9);
+}
+
+.rivens-action-btn.is-danger:hover {
+  color: var(--red);
+  border-color: rgba(251, 113, 133, 0.5);
+}
+
+.rivens-grade-filter {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  padding: 0 24px 8px;
+}
+
+.rivens-filter-spacer {
+  flex: 1;
+}
+
+.rivens-grade-chip {
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-family: var(--font-body);
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+}
+
+.rivens-grade-chip:hover {
+  color: var(--text-primary);
+  border-color: var(--border-accent);
+}
+
+.rivens-grade-chip.is-active {
+  color: #0a1016;
+  background: rgba(94, 234, 212, 0.85);
+  border-color: rgba(94, 234, 212, 0.9);
+}
+
+.rivens-status {
+  min-height: 16px;
+  padding: 0 24px 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.rivens-status-ok { color: var(--text-accent); }
+.rivens-status-error { color: var(--red); }
+
+.rivens-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rivens-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 44px 24px;
+  text-align: center;
+  border-radius: 14px;
+  border: 1px dashed var(--border-color);
+  color: var(--text-dim);
+}
+
+.rivens-empty .material-icons-round {
+  font-size: 26px;
+  color: var(--text-accent);
+  opacity: 0.7;
+}
+
+.rivens-empty-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.rivens-empty-body {
+  margin: 0;
+  max-width: 42ch;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.rivens-empty-body strong {
+  color: var(--text-accent);
+  font-weight: 400;
+}
+
+.riven-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 11px 13px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--glass-rim);
+}
+
+.riven-row:hover {
+  background: rgba(255, 255, 255, 0.055);
+  border-color: var(--border-accent);
+}
+
+.riven-row.is-listed {
+  border-color: rgba(94, 234, 212, 0.4);
+}
+
+.riven-row__grade {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  border-radius: 9px;
+  font-family: var(--font-display);
+  font-size: 17px;
+  color: #0a1016;
+  background: var(--riven-grade-color, var(--text-dim));
+}
+
+.riven-row__grade[data-grade="S"] { --riven-grade-color: #5eead4; }
+.riven-row__grade[data-grade="A"] { --riven-grade-color: #7dd3fc; }
+.riven-row__grade[data-grade="B"] { --riven-grade-color: #fbbf24; }
+.riven-row__grade[data-grade="C"] { --riven-grade-color: #fb7185; }
+
+.riven-row__main {
+  min-width: 0;
+}
+
+.riven-row__head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.riven-row__weapon {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.riven-row__name {
+  font-size: 11px;
+  color: var(--text-accent);
+}
+
+.riven-row__listed-tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #0a1016;
+  background: rgba(94, 234, 212, 0.85);
+}
+
+.riven-row__meta {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.riven-row__stats {
+  display: grid;
+  /* Two columns rather than auto-fill: at three the name and its value drift
+     far enough apart that the pair stops reading as one line, which is the one
+     thing a stat line has to do. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px 16px;
+  margin-top: 7px;
+  font-size: 10px;
+  max-width: 720px;
+}
+
+.riven-row__stat {
+  display: flex;
+  align-items: baseline;
+  /* Adjacent rather than space-between: riven stats are read as one phrase
+     ("Critical Damage 186x"), and pushing the value to the far edge of a grid
+     column breaks that pairing. */
+  gap: 6px;
+  padding-left: 6px;
+  border-left: 2px solid var(--riven-stat-color, var(--border-color));
+}
+
+.riven-row__stat[data-sign="positive"] { --riven-stat-color: #4ade80; }
+.riven-row__stat[data-sign="negative"] { --riven-stat-color: #fb7185; }
+
+.riven-row__stat-name {
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.riven-row__stat-value {
+  flex: none;
+  color: var(--riven-stat-color, var(--text-primary));
+}
+
+.riven-row__actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 190px;
+}
+
+.riven-list-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: rgba(6, 11, 16, 0.72);
+  border: 1px solid var(--border-accent);
+}
+
+.riven-list-form__label {
+  font-family: var(--font-display);
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.riven-list-form__input {
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 8px;
+  font-family: var(--font-body);
+  font-size: 10px;
+  color: var(--text-primary);
+  background: rgba(6, 11, 16, 0.8);
+  border: 1px solid var(--border-color);
+}
+
+.riven-list-form__input:focus {
+  border-color: rgba(94, 234, 212, 0.6);
+}
+
+.riven-list-form__actions {
+  display: flex;
+  gap: 5px;
+  margin-top: 2px;
+}
+
+.riven-list-form__hint {
+  margin: 0;
+  font-size: 9px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}

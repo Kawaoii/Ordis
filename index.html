@@ -584,6 +584,68 @@
       </div>
     </div>
 
+    <!-- Rivens Panel (hidden by default) -->
+    <!-- Rivens are saved here automatically every time the grading overlay reads
+         a reroll, so this tab is the answer to "what did I just roll" after the
+         reroll screen is gone. The grade sheet and dispositions both move, which
+         is why re-grading from the stored stats is offered rather than assumed
+         to be permanent. -->
+    <div class="rivens-panel hidden" id="riven-panel">
+      <div class="content-topbar rivens-topbar">
+        <div class="prime-topbar-title-wrap">
+          <h1 class="category-title">Rivens</h1>
+          <span class="category-count" id="rivens-count-text">0 saved. Rivens are added here when the grader
+            reads a reroll.</span>
+        </div>
+        <div class="rivens-toolbar">
+          <div class="search-container rivens-search-container">
+            <span class="material-icons-round search-icon">search</span>
+            <input type="text" class="search-input" id="riven-search-input"
+              placeholder="Search weapon, riven name, or stat..." autocomplete="off">
+            <button class="search-clear hidden" id="riven-search-clear" type="button" aria-label="Clear riven search">
+              <span class="material-icons-round">close</span>
+            </button>
+          </div>
+          <div class="rivens-sort" role="group" aria-label="Sort rivens">
+            <span class="rivens-sort-label">Sort</span>
+            <button type="button" class="rivens-sort-btn" data-riven-sort="grade" title="Riven grade">Grade</button>
+            <button type="button" class="rivens-sort-btn" data-riven-sort="perfectness"
+              title="How close each stat is to the best possible roll">Perfect</button>
+            <button type="button" class="rivens-sort-btn" data-riven-sort="disposition">Disp.</button>
+            <button type="button" class="rivens-sort-btn" data-riven-sort="name">Name</button>
+            <button type="button" class="rivens-sort-btn" data-riven-sort="recent">Newest</button>
+          </div>
+          <button type="button" class="rivens-action-btn" id="riven-regrade-btn"
+            title="Re-read dispositions and the community grade sheet, then re-grade every saved riven">
+            <span class="material-icons-round">refresh</span>
+            <span>Re-grade all</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="rivens-grade-filter" role="group" aria-label="Filter by grade">
+        <button type="button" class="rivens-grade-chip is-active" data-riven-grade="all">All</button>
+        <button type="button" class="rivens-grade-chip" data-riven-grade="S">Great</button>
+        <button type="button" class="rivens-grade-chip" data-riven-grade="A">Good</button>
+        <button type="button" class="rivens-grade-chip" data-riven-grade="B">OK</button>
+        <button type="button" class="rivens-grade-chip" data-riven-grade="C">Bad</button>
+        <span class="rivens-filter-spacer"></span>
+        <button type="button" class="rivens-grade-chip" data-riven-listing="unlisted">Not listed</button>
+        <button type="button" class="rivens-grade-chip" data-riven-listing="listed">Listed</button>
+      </div>
+
+      <div class="rivens-status" id="rivens-status" role="status"></div>
+
+      <div class="rivens-list" id="riven-list">
+        <div class="rivens-empty" id="riven-empty">
+          <span class="material-icons-round">auto_awesome</span>
+          <p class="rivens-empty-title">No rivens saved yet</p>
+          <p class="rivens-empty-body">Turn on <strong>Riven Grading</strong> in Settings, then reroll a riven in
+            Warframe. It is graded and filed here automatically.</p>
+        </div>
+      </div>
+    </div>
+
     <!-- Cycles Panel (hidden by default) -->
     <div class="cycles-panel hidden" id="cycles-panel">
       <div class="content-topbar">

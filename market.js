@@ -6519,4 +6519,17 @@ function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
     },
   };
 
+  /* The Rivens tab posts real sell orders, and it lives in renderer.js. Rather
+     than duplicate the auth header handling and the error unwrapping that
+     wfmFetch already does, the market exposes the two calls the tab needs.
+     Both go through the same session, so the tab inherits the Bearer header and
+     the cookie the rest of the app already manages. */
+  window.warframeMarketApi = {
+    fetch: wfmFetch,
+    createOrder: wfmCreateOrder,
+    isSignedIn: function () {
+      return !!wfmSession.token;
+    }
+  };
+
 })();

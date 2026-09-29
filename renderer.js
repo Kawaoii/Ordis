@@ -7804,6 +7804,7 @@ const visibilityTickHandles = new Set();
     console.log('[RivenOverlay] Scan result received:', { grade: grade.grade, score: grade.score });
 
     showRivenGradeNotification(parsed, grade, payload.partialCaveat || '');
+    refreshRivenPanelAfterScan(payload);
   }
 
   // The stat panel is only on screen for a moment after a reroll, so the text
@@ -16715,6 +16716,9 @@ card.addEventListener('auxclick', function(e) {
     window.electronAPI.onRivenScanResult(handleRivenScanResult);
   }
 
+  bindRivenInventoryEvents();
+  loadRivenInventory(false);
+
   if (els.themeOptions && els.themeOptions.length) {
     els.themeOptions.forEach(function(button) {
       button.addEventListener('click', function() {
@@ -17044,6 +17048,7 @@ card.addEventListener('auxclick', function(e) {
       prime: $('#prime-panel'),
       relics: $('#relics-panel'),
       arcanes: $('#arcanes-panel'),
+      rivens: $('#riven-panel'),
       cycles: $('#cycles-panel'),
       starchart: $('#starchart-panel'),
       squad: $('#squad-finder-panel'),
@@ -17078,6 +17083,7 @@ card.addEventListener('auxclick', function(e) {
     var primePanel = refs.prime;
     var relicsPanel = refs.relics;
     var arcanesPanel = refs.arcanes;
+    var rivensPanel = refs.rivens;
     var cyclesPanel = refs.cycles;
     var starchartPanel = refs.starchart;
     var squadPanel = refs.squad;
@@ -17122,6 +17128,8 @@ card.addEventListener('auxclick', function(e) {
       if (primePanel) primePanel.classList.add('hidden');
       if (relicsPanel) relicsPanel.classList.add('hidden');
       if (arcanesPanel) arcanesPanel.classList.add('hidden');
+
+      if (rivensPanel) rivensPanel.classList.add('hidden');
       if (cyclesPanel) cyclesPanel.classList.add('hidden');
       if (starchartPanel) starchartPanel.classList.add('hidden');
       settingsPage.classList.add('hidden');
@@ -17147,6 +17155,8 @@ card.addEventListener('auxclick', function(e) {
       if (primePanel) primePanel.classList.add('hidden');
       if (relicsPanel) relicsPanel.classList.add('hidden');
       if (arcanesPanel) arcanesPanel.classList.add('hidden');
+
+      if (rivensPanel) rivensPanel.classList.add('hidden');
       if (cyclesPanel) cyclesPanel.classList.add('hidden');
       if (starchartPanel) starchartPanel.classList.add('hidden');
       settingsPage.classList.add('hidden');
@@ -17174,6 +17184,8 @@ card.addEventListener('auxclick', function(e) {
       if (primePanel) primePanel.classList.remove('hidden');
       if (relicsPanel) relicsPanel.classList.add('hidden');
       if (arcanesPanel) arcanesPanel.classList.add('hidden');
+
+      if (rivensPanel) rivensPanel.classList.add('hidden');
       if (cyclesPanel) cyclesPanel.classList.add('hidden');
       if (starchartPanel) starchartPanel.classList.add('hidden');
       settingsPage.classList.add('hidden');
@@ -17194,6 +17206,8 @@ card.addEventListener('auxclick', function(e) {
       if (primePanel) primePanel.classList.add('hidden');
       if (relicsPanel) relicsPanel.classList.remove('hidden');
       if (arcanesPanel) arcanesPanel.classList.add('hidden');
+
+      if (rivensPanel) rivensPanel.classList.add('hidden');
       if (cyclesPanel) cyclesPanel.classList.add('hidden');
       if (starchartPanel) starchartPanel.classList.add('hidden');
       settingsPage.classList.add('hidden');
@@ -17229,6 +17243,28 @@ card.addEventListener('auxclick', function(e) {
       stopPrimeCountdown();
       stopCycleCountdown();
       loadArcaneDirectory(false);
+    } else if (panel === 'rivens') {
+      contentEl.classList.add('hidden');
+      marketPanel.classList.add('hidden');
+      if (analyticsPanel) analyticsPanel.classList.add('hidden');
+      if (primePanel) primePanel.classList.add('hidden');
+      if (relicsPanel) relicsPanel.classList.add('hidden');
+      if (arcanesPanel) arcanesPanel.classList.add('hidden');
+      if (rivensPanel) rivensPanel.classList.remove('hidden');
+      if (cyclesPanel) cyclesPanel.classList.add('hidden');
+      if (starchartPanel) starchartPanel.classList.add('hidden');
+      settingsPage.classList.add('hidden');
+      $$('.nav-item[data-category]').forEach(function(b) { b.classList.remove('active'); });
+      if (navMarket) navMarket.classList.remove('active');
+      if (navAnalytics) navAnalytics.classList.remove('active');
+      if (navPrime) navPrime.classList.remove('active');
+      if (navRelics) navRelics.classList.remove('active');
+      if (navArcanes) navArcanes.classList.remove('active');
+      if (navCycles) navCycles.classList.remove('active');
+      if (navStarchart) navStarchart.classList.remove('active');
+      stopPrimeCountdown();
+      stopCycleCountdown();
+      loadRivenInventory(false);
     } else if (panel === 'cycles') {
       contentEl.classList.add('hidden');
       marketPanel.classList.add('hidden');
@@ -17236,6 +17272,8 @@ card.addEventListener('auxclick', function(e) {
       if (primePanel) primePanel.classList.add('hidden');
       if (relicsPanel) relicsPanel.classList.add('hidden');
       if (arcanesPanel) arcanesPanel.classList.add('hidden');
+
+      if (rivensPanel) rivensPanel.classList.add('hidden');
       if (cyclesPanel) cyclesPanel.classList.remove('hidden');
       if (starchartPanel) starchartPanel.classList.add('hidden');
       settingsPage.classList.add('hidden');
@@ -17256,6 +17294,8 @@ card.addEventListener('auxclick', function(e) {
       if (primePanel) primePanel.classList.add('hidden');
       if (relicsPanel) relicsPanel.classList.add('hidden');
       if (arcanesPanel) arcanesPanel.classList.add('hidden');
+
+      if (rivensPanel) rivensPanel.classList.add('hidden');
       if (cyclesPanel) cyclesPanel.classList.add('hidden');
       if (starchartPanel) starchartPanel.classList.remove('hidden');
       settingsPage.classList.add('hidden');
@@ -17285,6 +17325,8 @@ card.addEventListener('auxclick', function(e) {
       if (primePanel) primePanel.classList.add('hidden');
       if (relicsPanel) relicsPanel.classList.add('hidden');
       if (arcanesPanel) arcanesPanel.classList.add('hidden');
+
+      if (rivensPanel) rivensPanel.classList.add('hidden');
       if (cyclesPanel) cyclesPanel.classList.add('hidden');
       if (starchartPanel) starchartPanel.classList.add('hidden');
       if (comparePanel) comparePanel.classList.remove('hidden');
@@ -17310,6 +17352,8 @@ card.addEventListener('auxclick', function(e) {
       if (primePanel) primePanel.classList.add('hidden');
       if (relicsPanel) relicsPanel.classList.add('hidden');
       if (arcanesPanel) arcanesPanel.classList.add('hidden');
+
+      if (rivensPanel) rivensPanel.classList.add('hidden');
       if (cyclesPanel) cyclesPanel.classList.add('hidden');
       if (starchartPanel) starchartPanel.classList.add('hidden');
       if (recommendationsPanel) recommendationsPanel.classList.remove('hidden');
@@ -17333,6 +17377,8 @@ card.addEventListener('auxclick', function(e) {
       if (primePanel) primePanel.classList.add('hidden');
       if (relicsPanel) relicsPanel.classList.add('hidden');
       if (arcanesPanel) arcanesPanel.classList.add('hidden');
+
+      if (rivensPanel) rivensPanel.classList.add('hidden');
       if (cyclesPanel) cyclesPanel.classList.add('hidden');
       if (starchartPanel) starchartPanel.classList.add('hidden');
       if (resourceSearchPanel) resourceSearchPanel.classList.remove('hidden');
@@ -17356,6 +17402,8 @@ card.addEventListener('auxclick', function(e) {
       if (primePanel) primePanel.classList.add('hidden');
       if (relicsPanel) relicsPanel.classList.add('hidden');
       if (arcanesPanel) arcanesPanel.classList.add('hidden');
+
+      if (rivensPanel) rivensPanel.classList.add('hidden');
       if (cyclesPanel) cyclesPanel.classList.add('hidden');
       if (starchartPanel) starchartPanel.classList.add('hidden');
       settingsPage.classList.remove('hidden');
@@ -17375,6 +17423,8 @@ card.addEventListener('auxclick', function(e) {
       if (primePanel) primePanel.classList.add('hidden');
       if (relicsPanel) relicsPanel.classList.add('hidden');
       if (arcanesPanel) arcanesPanel.classList.add('hidden');
+
+      if (rivensPanel) rivensPanel.classList.add('hidden');
       if (cyclesPanel) cyclesPanel.classList.add('hidden');
       if (starchartPanel) starchartPanel.classList.add('hidden');
       settingsPage.classList.add('hidden');
@@ -17434,6 +17484,12 @@ card.addEventListener('auxclick', function(e) {
     // item modal, and the strip used to keep highlighting the previous panel.
     if (window.OrdisDock && typeof window.OrdisDock.sync === 'function') {
       window.OrdisDock.sync(panel);
+    }
+
+    // The Rivens tab reads a file the main process writes on every scan, so it
+    // is read when the tab is opened rather than kept live.
+    if (panel === 'rivens') {
+      loadRivenInventory(false);
     }
 
     if (panelSwitchInProgress || !smooth || currentName === panel) {
@@ -17512,6 +17568,452 @@ card.addEventListener('auxclick', function(e) {
     navCycles.addEventListener('click', function() {
       showPanel('cycles', true);
     });
+  }
+
+  /* ============================================================
+     Rivens tab
+     ------------------------------------------------------------
+     Reads the inventory the main process writes after every successful scan.
+     Deliberately has no write path of its own beyond the two explicit actions
+     (list, delete): saving a scanned riven must never be able to create a
+     market order as a side effect.
+     ============================================================ */
+  var rivenInventory = [];
+  var rivenSort = 'recent';
+  var rivenGradeFilter = 'all';
+  var rivenListingFilter = 'all';
+  var rivenSearchTerm = '';
+  var rivenListFormId = null;
+
+  // Warframe.market sells rivens as one generic item per weapon class, with the
+  // riven's own in-game id passed as the order subtype. That id is not on the
+  // stat panel, so it has to be typed in.
+  var WFM_RIVEN_ITEM_SLUGS = {
+    rifle: 'rifle_riven_mod_(revealed)',
+    shotgun: 'shotgun_riven_mod_(revealed)',
+    pistol: 'pistol_riven_mod_(revealed)',
+    melee: 'melee_riven_mod_(revealed)',
+    kitgun: 'kitgun_riven_mod_(revealed)',
+    zaw: 'zaw_riven_mod_(revealed)'
+  };
+
+  var WFM_RIVEN_ITEM_NAMES = {
+    rifle: 'Rifle Riven Mod (Revealed)',
+    shotgun: 'Shotgun Riven Mod (Revealed)',
+    pistol: 'Pistol Riven Mod (Revealed)',
+    melee: 'Melee Riven Mod (Revealed)',
+    kitgun: 'Kitgun Riven Mod (Revealed)',
+    zaw: 'Zaw Riven Mod (Revealed)'
+  };
+
+  // Which Warframe.market item a riven is posted under. Warframe.market sells
+  // rivens as one generic item per weapon class, so picking the wrong class
+  // would publish a rifle riven as a pistol one. Warframe.market's own riven
+  // weapons list carries rivenType, so that is preferred over the grading
+  // engine's weaponClass, which is a separate inference.
+  function rivenMarketClass(entry) {
+    return entry.rivenType || entry.weaponClass || '';
+  }
+
+  function rivenMarketItemName(className) {
+    return WFM_RIVEN_ITEM_NAMES[className] || 'Riven Mod (Revealed)';
+  }
+
+  function setRivenStatus(message, kind) {
+    var el = $('#rivens-status');
+    if (!el) return;
+    el.textContent = message || '';
+    el.className = 'rivens-status' + (kind ? ' rivens-status-' + kind : '');
+  }
+
+  function rivenMatchesSearch(entry, term) {
+    if (!term) return true;
+    var needle = term.toLowerCase();
+    if ((entry.weaponName || '').toLowerCase().indexOf(needle) !== -1) return true;
+    if ((entry.rivenName || '').toLowerCase().indexOf(needle) !== -1) return true;
+    if ((entry.gradeLabel || '').toLowerCase().indexOf(needle) !== -1) return true;
+    for (var i = 0; i < entry.stats.length; i++) {
+      if (entry.stats[i].name.toLowerCase().indexOf(needle) !== -1) return true;
+    }
+    return false;
+  }
+
+  // Grade bands follow the community sheet the engine grades against: S is the
+  // top band, so the list sorts best-first rather than alphabetically.
+  function rivenGradeRank(grade) {
+    return { S: 0, A: 1, B: 2, C: 3 }[grade] != null ? { S: 0, A: 1, B: 2, C: 3 }[grade] : 9;
+  }
+
+  function sortRivenEntries(entries, mode) {
+    var sorted = entries.slice();
+    sorted.sort(function(a, b) {
+      switch (mode) {
+        case 'grade':
+          var byGrade = rivenGradeRank(a.grade) - rivenGradeRank(b.grade);
+          if (byGrade !== 0) return byGrade;
+          return (b.score || 0) - (a.score || 0);
+        case 'perfectness':
+          // Rivens with no known disposition have no perfectness, so they sink
+          // rather than being treated as 0% and sorting above a bad riven.
+          if (a.perfectness == null && b.perfectness == null) return 0;
+          if (a.perfectness == null) return 1;
+          if (b.perfectness == null) return -1;
+          return b.perfectness - a.perfectness;
+        case 'disposition':
+          var ad = a.disposition == null ? -1 : a.disposition;
+          var bd = b.disposition == null ? -1 : b.disposition;
+          if (ad !== bd) return bd - ad;
+          return (a.weaponName || '').localeCompare(b.weaponName || '');
+        case 'name':
+          return (a.weaponName || '').localeCompare(b.weaponName || '');
+        default:
+          return b.createdAt - a.createdAt;
+      }
+    });
+    return sorted;
+  }
+
+  function buildRivenTradeString(entry) {
+    var stats = entry.stats.map(function(s) {
+      return (s.isPositive ? '+' : '-') + s.name + ' ' + s.value + 'x';
+    }).join(', ');
+    return '[' + (entry.weaponName || 'Unknown weapon') + (entry.rivenName ? ' ' + entry.rivenName : '') + '] ' + stats;
+  }
+
+  function renderRivenInventory() {
+    var list = $('#riven-list');
+    if (!list) return;
+
+    var countEl = $('#rivens-count-text');
+    if (countEl) {
+      countEl.textContent = rivenInventory.length === 1
+        ? '1 saved riven.'
+        : rivenInventory.length + ' saved rivens.';
+    }
+
+    var filtered = rivenInventory.filter(function(entry) {
+      if (rivenGradeFilter !== 'all' && entry.grade !== rivenGradeFilter) return false;
+      if (rivenListingFilter === 'listed' && !entry.wfmOrderId) return false;
+      if (rivenListingFilter === 'unlisted' && entry.wfmOrderId) return false;
+      return rivenMatchesSearch(entry, rivenSearchTerm);
+    });
+
+    filtered = sortRivenEntries(filtered, rivenSort);
+
+    var emptyEl = $('#riven-empty');
+    if (!filtered.length) {
+      list.innerHTML = '';
+      if (rivenInventory.length) {
+        list.innerHTML = '<div class="rivens-empty">' +
+          '<span class="material-icons-round">filter_alt_off</span>' +
+          '<p class="rivens-empty-title">Nothing matches</p>' +
+          '<p class="rivens-empty-body">Try a different grade, listing filter, or search.</p>' +
+          '</div>';
+      } else if (emptyEl) {
+        list.appendChild(emptyEl);
+      }
+      return;
+    }
+
+    var html = filtered.map(function(entry) {
+      var statsHtml = entry.stats.map(function(s) {
+        return '<div class="riven-row__stat" data-sign="' + (s.isPositive ? 'positive' : 'negative') + '">' +
+          '<span class="riven-row__stat-name">' + escapeRivenText(s.name) + '</span>' +
+          '<span class="riven-row__stat-value">' + (s.isPositive ? '+' : '-') +
+          escapeRivenText(s.value) + '%</span></div>';
+      }).join('');
+
+      var metaBits = [];
+      if (entry.score != null) metaBits.push('score ' + entry.score);
+      if (entry.perfectness != null) metaBits.push(entry.perfectness + '% of max roll');
+      if (entry.disposition != null) metaBits.push('disposition ' + entry.disposition);
+      if (entry.reqMasteryRank) metaBits.push('MR' + entry.reqMasteryRank);
+
+      var listed = !!entry.wfmOrderId;
+      var classSlug = rivenMarketClass(entry);
+      var classConflict = entry.rivenType && entry.weaponClass && entry.rivenType !== entry.weaponClass;
+
+      return '<article class="riven-row' + (listed ? ' is-listed' : '') + '" data-riven-id="' +
+        escapeRivenText(entry.id) + '">' +
+        '<div class="riven-row__grade" data-grade="' + escapeRivenText(entry.grade || '?') +
+          '" title="' + escapeRivenText(entry.gradeLabel || '') + '">' +
+          escapeRivenText(entry.grade || '?') + '</div>' +
+        '<div class="riven-row__main">' +
+          '<div class="riven-row__head">' +
+            '<h3 class="riven-row__weapon">' + escapeRivenText(entry.weaponName || 'Unknown weapon') + '</h3>' +
+            (entry.rivenName ? '<span class="riven-row__name">' + escapeRivenText(entry.rivenName) + '</span>' : '') +
+            (listed ? '<span class="riven-row__listed-tag">Listed</span>' : '') +
+          '</div>' +
+          '<div class="riven-row__meta">' + escapeRivenText(metaBits.join(' · ')) + '</div>' +
+          '<div class="riven-row__stats">' + statsHtml + '</div>' +
+        '</div>' +
+        '<div class="riven-row__actions">' +
+          (rivenListFormId === entry.id
+            ? '<div class="riven-list-form">' +
+                '<label class="riven-list-form__label">Riven id</label>' +
+                '<input class="riven-list-form__input" id="riven-subtype-' + escapeRivenText(entry.id) +
+                  '" placeholder="from the mod card" value="' + escapeRivenText(entry.wfmSubtype || '') + '">' +
+                '<label class="riven-list-form__label">Price</label>' +
+                '<input class="riven-list-form__input" id="riven-price-' + escapeRivenText(entry.id) +
+                  '" type="number" min="1" placeholder="250" value="' + escapeRivenText(entry.listedPrice || '') + '">' +
+                '<div class="riven-list-form__actions">' +
+                  '<button type="button" class="riven-action-btn is-primary" data-riven-action="confirm-list">Post</button>' +
+                  '<button type="button" class="riven-action-btn" data-riven-action="cancel-list">Cancel</button>' +
+                '</div>' +
+                '<p class="riven-list-form__hint">Posted as ' +
+                  escapeRivenText(rivenMarketItemName(classSlug)) +
+                  (classConflict ? '. The grade data disagrees about the weapon class.' : '.') +
+                '</p>' +
+              '</div>'
+            : '<button type="button" class="riven-action-btn" data-riven-action="list">List</button>') +
+          '<button type="button" class="riven-action-btn" data-riven-action="copy">Copy</button>' +
+          '<button type="button" class="riven-action-btn is-danger" data-riven-action="delete">Delete</button>' +
+        '</div>' +
+      '</article>';
+    }).join('');
+
+    list.innerHTML = html;
+  }
+
+  async function loadRivenInventory(announce) {
+    if (!window.electronAPI || typeof window.electronAPI.rivenInventoryList !== 'function') return;
+    try {
+      var res = await window.electronAPI.rivenInventoryList();
+      rivenInventory = (res && res.entries) || [];
+      renderRivenInventory();
+      if (announce) setRivenStatus('Loaded ' + rivenInventory.length + ' saved riven' +
+        (rivenInventory.length === 1 ? '' : 's') + '.', '');
+    } catch (err) {
+      setRivenStatus('Could not read the saved rivens: ' + (err && err.message ? err.message : 'unknown error'), 'error');
+    }
+  }
+
+  function findRivenEntry(id) {
+    for (var i = 0; i < rivenInventory.length; i++) {
+      if (rivenInventory[i].id === id) return rivenInventory[i];
+    }
+    return null;
+  }
+
+  async function listRivenOnWfm(id) {
+    var entry = findRivenEntry(id);
+    if (!entry) return;
+
+    var subtypeInput = document.getElementById('riven-subtype-' + id);
+    var priceInput = document.getElementById('riven-price-' + id);
+    var subtype = subtypeInput ? String(subtypeInput.value || '').trim() : entry.wfmSubtype;
+    var price = priceInput ? Number(priceInput.value) : entry.listedPrice;
+
+    if (!subtype) {
+      setRivenStatus('Warframe.market needs the riven\'s own id to list it. Open the mod card in game and copy it in.', 'error');
+      return;
+    }
+    if (!Number.isFinite(price) || price < 1) {
+      setRivenStatus('Enter a price in platinum before posting.', 'error');
+      return;
+    }
+
+    var slug = WFM_RIVEN_ITEM_SLUGS[rivenMarketClass(entry)];
+    if (!slug) {
+      setRivenStatus('The weapon class for this riven is unknown, so the market item could not be chosen.', 'error');
+      return;
+    }
+    var marketClass = rivenMarketClass(entry);
+    if (entry.rivenType && entry.weaponClass && entry.rivenType !== entry.weaponClass) {
+      setRivenStatus('Warframe.market lists this weapon as ' + rivenMarketItemName(marketClass) +
+        ' while the grade data calls it ' + rivenMarketItemName(entry.weaponClass) +
+        '. Posting under ' + rivenMarketItemName(marketClass) + '.', 'error');
+    }
+
+    var api = window.warframeMarketApi;
+    if (!api || !api.fetch || !api.createOrder) {
+      setRivenStatus('The market client is not available, so the riven cannot be posted from here.', 'error');
+      return;
+    }
+    if (api.isSignedIn && !api.isSignedIn()) {
+      setRivenStatus('Sign in to Warframe.market first, then post the riven from here.', 'error');
+      return;
+    }
+
+    try {
+      var itemsRes = await api.fetch('https://api.warframe.market/v2/item/' + encodeURIComponent(slug));
+      var item = itemsRes && itemsRes.data;
+      if (!item || !item.id) {
+        setRivenStatus('Warframe.market does not have an item for ' + rivenMarketItemName(marketClass) + '.', 'error');
+        return;
+      }
+      if (Array.isArray(item.subtypes) && item.subtypes.length && item.subtypes.indexOf(subtype) === -1) {
+        setRivenStatus('Warframe.market does not list riven id "' + subtype + '" on that account yet. ' +
+          'Double-check the id, and make sure the riven is actually in your inventory.', 'error');
+        return;
+      }
+
+      var res = await api.createOrder(item.id, 'sell', price, 1, true, { subtype: subtype });
+      var order = res && res.data;
+      if (!order || !order.id) {
+        setRivenStatus('The order was sent but no order id came back. Check My Orders on Warframe.market.', 'error');
+        return;
+      }
+
+      var updated = await window.electronAPI.rivenInventoryUpdate(id, {
+        wfmSubtype: subtype,
+        listedPrice: price,
+        wfmOrderId: order.id
+      });
+      if (updated && updated.entry) {
+        rivenInventory = rivenInventory.map(function(e) { return e.id === id ? updated.entry : e; });
+      }
+      rivenListFormId = null;
+      renderRivenInventory();
+      setRivenStatus('Listed for ' + price + ' platinum.', 'ok');
+    } catch (err) {
+      setRivenStatus('Could not list the riven: ' + (err && err.message ? err.message : 'unknown error'), 'error');
+    }
+  }
+
+  async function deleteRivenEntry(id) {
+    try {
+      var res = await window.electronAPI.rivenInventoryRemove(id);
+      if (!res || !res.ok) {
+        setRivenStatus((res && res.message) || 'Could not remove that riven.', 'error');
+        return;
+      }
+      rivenInventory = rivenInventory.filter(function(e) { return e.id !== id; });
+      renderRivenInventory();
+      setRivenStatus('Removed.', '');
+    } catch (err) {
+      setRivenStatus('Could not remove that riven: ' + (err && err.message ? err.message : 'unknown error'), 'error');
+    }
+  }
+
+  function bindRivenInventoryEvents() {
+    var searchInput = $('#riven-search-input');
+    if (searchInput) {
+      searchInput.addEventListener('input', function() {
+        rivenSearchTerm = String(searchInput.value || '').trim();
+        var clear = $('#riven-search-clear');
+        if (clear) clear.classList.toggle('hidden', !rivenSearchTerm);
+        renderRivenInventory();
+      });
+    }
+
+    var clearBtn = $('#riven-search-clear');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', function() {
+        if (searchInput) searchInput.value = '';
+        rivenSearchTerm = '';
+        clearBtn.classList.add('hidden');
+        renderRivenInventory();
+      });
+    }
+
+    var sortWrap = document.querySelector('.rivens-sort');
+    if (sortWrap) {
+      sortWrap.addEventListener('click', function(ev) {
+        var btn = ev.target.closest('.rivens-sort-btn');
+        if (!btn) return;
+        rivenSort = btn.getAttribute('data-riven-sort') || 'recent';
+        var all = sortWrap.querySelectorAll('.rivens-sort-btn');
+        for (var i = 0; i < all.length; i++) {
+          all[i].classList.toggle('is-active', all[i] === btn);
+        }
+        renderRivenInventory();
+      });
+    }
+
+    var filterWrap = document.querySelector('.rivens-grade-filter');
+    if (filterWrap) {
+      filterWrap.addEventListener('click', function(ev) {
+        var gradeBtn = ev.target.closest('[data-riven-grade]');
+        if (gradeBtn) {
+          rivenGradeFilter = gradeBtn.getAttribute('data-riven-grade') || 'all';
+          var gradeChips = filterWrap.querySelectorAll('[data-riven-grade]');
+          for (var i = 0; i < gradeChips.length; i++) {
+            gradeChips[i].classList.toggle('is-active', gradeChips[i] === gradeBtn);
+          }
+        }
+        var listingBtn = ev.target.closest('[data-riven-listing]');
+        if (listingBtn) {
+          rivenListingFilter = listingBtn.getAttribute('data-riven-listing') || 'all';
+          var listingChips = filterWrap.querySelectorAll('[data-riven-listing]');
+          for (var j = 0; j < listingChips.length; j++) {
+            listingChips[j].classList.toggle('is-active', listingChips[j] === listingBtn);
+          }
+        }
+        renderRivenInventory();
+      });
+    }
+
+    var list = $('#riven-list');
+    if (list) {
+      list.addEventListener('click', function(ev) {
+        var row = ev.target.closest('.riven-row');
+        if (!row) return;
+        var id = row.getAttribute('data-riven-id');
+        var actionBtn = ev.target.closest('[data-riven-action]');
+        if (!actionBtn) return;
+        var action = actionBtn.getAttribute('data-riven-action');
+
+        if (action === 'list') {
+          rivenListFormId = id;
+          renderRivenInventory();
+          var input = document.getElementById('riven-subtype-' + id);
+          if (input) input.focus();
+        } else if (action === 'cancel-list') {
+          rivenListFormId = null;
+          renderRivenInventory();
+        } else if (action === 'confirm-list') {
+          listRivenOnWfm(id);
+        } else if (action === 'copy') {
+          var entry = findRivenEntry(id);
+          if (!entry) return;
+          var text = buildRivenTradeString(entry);
+          // copyTextToClipboard falls back to execCommand, which is what
+          // actually works on a file:// page; the async Clipboard API is
+          // rejected as an insecure context here.
+          copyTextToClipboard(text).then(function(ok) {
+            if (ok) {
+              setRivenStatus('Copied: ' + text, 'ok');
+            } else {
+              setRivenStatus('Could not copy to the clipboard.', 'error');
+            }
+          });
+        } else if (action === 'delete') {
+          deleteRivenEntry(id);
+        }
+      });
+    }
+
+    var regradeBtn = $('#riven-regrade-btn');
+    if (regradeBtn) {
+      regradeBtn.addEventListener('click', async function() {
+        regradeBtn.disabled = true;
+        setRivenStatus('Re-reading dispositions and grade sheet...', '');
+        try {
+          var res = await window.electronAPI.rivenInventoryRegrade();
+          if (!res || !res.ok) {
+            setRivenStatus((res && res.message) || 'Re-grade failed.', 'error');
+          } else {
+            rivenInventory = res.entries || rivenInventory;
+            renderRivenInventory();
+            setRivenStatus('Re-graded ' + res.updated + ' riven' + (res.updated === 1 ? '' : 's') +
+              (res.failed ? ', ' + res.failed + ' could not be matched to a weapon' : '') + '.', 'ok');
+          }
+        } catch (err) {
+          setRivenStatus('Re-grade failed: ' + (err && err.message ? err.message : 'unknown error'), 'error');
+        } finally {
+          regradeBtn.disabled = false;
+        }
+      });
+    }
+  }
+
+  // Refresh the tab after a scan files a new riven, but only when it is already
+  // open: re-rendering a hidden list on every reroll is wasted work.
+  function refreshRivenPanelAfterScan(payload) {
+    if (!payload || !payload.success) return;
+    var panel = $('#riven-panel');
+    if (panel && !panel.classList.contains('hidden')) loadRivenInventory(false);
   }
 
   var navStarchartEl = $('#nav-starchart');

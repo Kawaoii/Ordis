@@ -45,6 +45,7 @@
     { id: 'prime', label: 'Prime Resurgence', icon: 'workspace_premium', el: '#prime-panel', nav: '#nav-prime-resurgence', minW: 440, minH: 280 },
     { id: 'relics', label: 'Relics', icon: 'category', el: '#relics-panel', nav: '#nav-relics', minW: 440, minH: 300 },
     { id: 'arcanes', label: 'Arcanes', icon: 'auto_awesome', el: '#arcanes-panel', nav: '#nav-arcanes', minW: 440, minH: 300 },
+    { id: 'rivens', label: 'Rivens', icon: 'filter_alt', el: '#riven-panel', nav: null, minW: 460, minH: 340 },
     { id: 'cycles', label: 'Cycles', icon: 'calendar_month', el: '#cycles-panel', nav: '#nav-cycles', minW: 420, minH: 300 },
     { id: 'starchart', label: 'Star Chart', icon: 'travel_explore', el: '#starchart-panel', nav: '#nav-starchart', minW: 480, minH: 320 },
     { id: 'compare', label: 'Compare', icon: 'compare_arrows', el: '#compare-panel', nav: '#nav-compare', minW: 480, minH: 320 },

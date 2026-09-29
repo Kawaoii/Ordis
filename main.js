@@ -137,7 +137,160 @@ let relicOverlayLogTimer = null;
 let relicOverlayLogPath = '';
 let relicOverlayLogOffset = 0;
 let relicOverlayLogMissingNotified = false;
+/* ============================================================
+   Riven inventory
+   ------------------------------------------------------------
+   Scanned rivens are kept in one JSON file next to the other caches, so the
+   list survives a restart and can be inspected or deleted by hand.
+
+   The record deliberately keeps the raw parse alongside the grade. The grade
+   depends on the community sheet and on the weapon's disposition, and both
+   move: dispositions change every Prime Access and the sheet gets corrected.
+   Re-grading from the stored stats is therefore always possible, and nothing
+   here is lost when the verdict changes.
+   ============================================================ */
+const RIVEN_INVENTORY_FILE = 'riven-inventory.json';
+const RIVEN_INVENTORY_VERSION = 1;
+const RIVEN_INVENTORY_MAX = 500;
+
+function getRivenInventoryPath() {
+  return path.join(app.getPath('userData'), RIVEN_INVENTORY_FILE);
+}
+
+let rivenInventoryCache = null;
+let rivenInventoryWriteChain = Promise.resolve();
+
+function normalizeRivenInventoryEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const stats = Array.isArray(raw.stats) ? raw.stats : [];
+  if (!stats.length) return null;
+
+  const grade = raw.grade && typeof raw.grade === 'object' ? raw.grade : {};
+  const cleanStats = stats
+    .filter((s) => s && typeof s === 'object' && s.name)
+    .map((s) => ({
+      name: String(s.name),
+      value: Number(s.value) || 0,
+      isPositive: !!s.isPositive
+    }));
+  if (!cleanStats.length) return null;
+
+  return {
+    id: String(raw.id || '').trim() || 'r-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
+    weaponName: String(raw.weaponName || raw.parsed?.weaponName || '').trim(),
+    rivenName: String(raw.rivenName || raw.parsed?.rivenName || '').trim(),
+    stats: cleanStats,
+    grade: String(grade.grade || '').trim().toUpperCase(),
+    gradeLabel: String(grade.gradeLabel || '').trim(),
+    score: Number.isFinite(Number(grade.score)) ? Number(grade.score) : null,
+    perfectness: grade.perfectnessKnown && Number.isFinite(Number(grade.perfectness)) ? Number(grade.perfectness) : null,
+    perfectnessKnown: !!grade.perfectnessKnown,
+    weaponClass: String(grade.weaponClass || '').trim(),
+    // rivenType comes from Warframe.market's own riven weapons list and is the
+    // field that decides which market item the riven is posted under. The
+    // grading engine's weaponClass is a separate inference used for the grade
+    // sheet, so the two can disagree; where they do, the market one wins,
+    // because posting a riven under the wrong item is not recoverable by the
+    // buyer.
+    rivenType: String(raw.rivenType || '').trim(),
+    disposition: Number.isFinite(Number(raw.disposition)) ? Number(raw.disposition) : null,
+    reqMasteryRank: Number.isFinite(Number(raw.reqMasteryRank)) ? Number(raw.reqMasteryRank) : null,
+    reasons: Array.isArray(grade.reasons) ? grade.reasons.map(String).slice(0, 5) : [],
+    // The riven's own unique in-game id. Warframe.market identifies a riven by
+    // the generic riven item plus this value as the order subtype, and it is not
+    // derivable from a screenshot of the stat panel, so it has to be entered by
+    // hand before the riven can be listed.
+    wfmSubtype: String(raw.wfmSubtype || '').trim(),
+    listedPrice: Number.isFinite(Number(raw.listedPrice)) ? Number(raw.listedPrice) : null,
+    wfmOrderId: String(raw.wfmOrderId || '').trim(),
+    createdAt: Number.isFinite(Number(raw.createdAt)) ? Number(raw.createdAt) : Date.now()
+  };
+}
+
+async function readRivenInventory() {
+  if (rivenInventoryCache) return rivenInventoryCache;
+  const raw = await readJsonFile(getRivenInventoryPath(), null);
+  const entries = Array.isArray(raw) ? raw : raw && Array.isArray(raw.entries) ? raw.entries : [];
+  rivenInventoryCache = entries.map(normalizeRivenInventoryEntry).filter(Boolean);
+  return rivenInventoryCache;
+}
+
+// Serialised through a chain so two scans arriving close together cannot
+// interleave a read and a write and lose the second entry.
+function writeRivenInventory(entries) {
+  rivenInventoryWriteChain = rivenInventoryWriteChain.then(async () => {
+    const body = { version: RIVEN_INVENTORY_VERSION, entries };
+    await writeJsonFile(getRivenInventoryPath(), body);
+    rivenInventoryCache = entries;
+  }).catch(() => {
+    rivenInventoryCache = entries;
+  });
+  return rivenInventoryWriteChain;
+}
+
+function rivenStatsFingerprint(entry) {
+  return [entry.weaponName || '']
+    .concat(entry.stats.map((s) => (s.isPositive ? '+' : '-') + s.name + ':' + s.value))
+    .join('~');
+}
+
+async function addRivenToInventory(entry) {
+  const normalized = normalizeRivenInventoryEntry(entry);
+  if (!normalized) return null;
+
+  const entries = await readRivenInventory();
+  const fingerprint = rivenStatsFingerprint(normalized);
+
+  // Rerolling a stat panel produces a new read every time. Without this the
+  // inventory fills with copies of the same riven the moment the player is
+  // sitting on the reroll screen.
+  const existingIndex = entries.findIndex((e) => rivenStatsFingerprint(e) === fingerprint);
+  if (existingIndex !== -1) {
+    const merged = Object.assign({}, entries[existingIndex], {
+      // A re-read can improve the grade: the disposition sheet or the community
+      // data may have been updated since it was first saved.
+      grade: normalized.grade || entries[existingIndex].grade,
+      gradeLabel: normalized.gradeLabel || entries[existingIndex].gradeLabel,
+      score: normalized.score != null ? normalized.score : entries[existingIndex].score,
+      perfectness: normalized.perfectness != null ? normalized.perfectness : entries[existingIndex].perfectness,
+      reasons: normalized.reasons.length ? normalized.reasons : entries[existingIndex].reasons,
+      lastSeenAt: Date.now()
+    });
+    entries[existingIndex] = merged;
+    await writeRivenInventory(entries);
+    return { entry: merged, created: false };
+  }
+
+  normalized.lastSeenAt = Date.now();
+  entries.unshift(normalized);
+  // Newest first is the useful order, so trimming from the tail drops the
+  // oldest rather than whatever was scanned most recently.
+  const trimmed = entries.slice(0, RIVEN_INVENTORY_MAX);
+  await writeRivenInventory(trimmed);
+  return { entry: normalized, created: true };
+}
+
+async function updateRivenInventoryEntry(id, patch) {
+  const entries = await readRivenInventory();
+  const index = entries.findIndex((e) => e.id === id);
+  if (index === -1) return null;
+  const merged = normalizeRivenInventoryEntry(Object.assign({}, entries[index], patch, { id: entries[index].id }));
+  if (!merged) return null;
+  entries[index] = merged;
+  await writeRivenInventory(entries);
+  return merged;
+}
+
+async function removeRivenInventoryEntry(id) {
+  const entries = await readRivenInventory();
+  const next = entries.filter((e) => e.id !== id);
+  if (next.length === entries.length) return false;
+  await writeRivenInventory(next);
+  return true;
+}
+
 let rivenOverlayEnabled = false;
+
 let rivenOverlayLogTimer = null;
 let rivenOverlayLogPath = '';
 let rivenOverlayLogOffset = 0;
@@ -1262,7 +1415,7 @@ async function gradeRivenScan(success) {
     });
   }
 
-  return Object.assign({}, base, {
+  const result = Object.assign({}, base, {
     success: true,
     parsed: parsed,
     grade: grade,
@@ -1278,6 +1431,25 @@ async function gradeRivenScan(success) {
         'that already has its maximum ' + RIVEN_MAX_BONUSES + ' bonuses and ' + RIVEN_MAX_CURSES + ' curse.'
       : ''
   });
+
+  // Saved to the inventory so the riven is still there once the reroll screen
+  // is gone. A failure here must not lose the grade that was just computed.
+  try {
+    const saved = await addRivenToInventory({
+      weaponName: parsed.weaponName,
+      rivenName: parsed.rivenName,
+      stats: parsed.stats,
+      grade: grade,
+      disposition: weapon && weapon.disposition != null ? weapon.disposition : null,
+      reqMasteryRank: weapon && weapon.reqMasteryRank != null ? weapon.reqMasteryRank : null,
+      rivenType: weapon && weapon.rivenType ? weapon.rivenType : null
+    });
+    if (saved) result.inventory = { id: saved.entry.id, created: saved.created };
+  } catch (err) {
+    result.inventoryError = 'Graded, but the riven could not be added to the Rivens tab.';
+  }
+
+  return result;
 }
 
 async function runRivenScanBurst() {
@@ -2592,11 +2764,105 @@ ipcMain.handle('set-riven-overlay-enabled', async (_event, enabled) => {
   }
 });
 
+/* ============================================================
+   Riven inventory IPC
+   ------------------------------------------------------------
+   These read and write a local JSON file. Nothing here touches the network:
+   listing a riven on Warframe.market is a separate, explicit action taken by
+   the renderer with the user's own credentials, so saving a scanned riven can
+   never create an order by accident.
+   ============================================================ */
+ipcMain.handle('riven-inventory-list', async () => {
+  const entries = await readRivenInventory();
+  return { ok: true, entries };
+});
+
+ipcMain.handle('riven-inventory-add', async (_event, entry) => {
+  const saved = await addRivenToInventory(entry || {});
+  if (!saved) return { ok: false, message: 'That riven had no readable stats to save.' };
+  return { ok: true, entry: saved.entry, created: saved.created };
+});
+
+ipcMain.handle('riven-inventory-update', async (_event, payload) => {
+  const data = payload || {};
+  if (!data.id) return { ok: false, message: 'No riven id given.' };
+  const entry = await updateRivenInventoryEntry(data.id, data.patch || {});
+  if (!entry) return { ok: false, message: 'That riven is no longer in the list.' };
+  return { ok: true, entry };
+});
+
+ipcMain.handle('riven-inventory-remove', async (_event, id) => {
+  const removed = await removeRivenInventoryEntry(id);
+  if (!removed) return { ok: false, message: 'That riven is no longer in the list.' };
+  return { ok: true };
+});
+
+/* ============================================================
+   Riven re-grade
+   ------------------------------------------------------------
+   The community grade sheet and the weapon dispositions both move, and
+   dispositions change with every Prime Access. Re-grading from the stored
+   stats means a riven saved months ago is not stuck with a stale verdict.
+   ============================================================ */
+ipcMain.handle('riven-inventory-regrade', async () => {
+  const entries = await readRivenInventory();
+  if (!entries.length) return { ok: true, updated: 0, failed: 0, entries };
+
+  let data = null;
+  try {
+    data = await getRivenDataModule().getRivenData();
+  } catch (err) {
+    return {
+      ok: false,
+      message: 'Could not reach the riven data sources: ' +
+        (err && err.message ? err.message : 'unknown error'),
+      entries
+    };
+  }
+
+  const rivenData = getRivenDataModule();
+  let updated = 0;
+  let failed = 0;
+
+  for (const entry of entries) {
+    try {
+      // findRivenWeapon returns a { weapon, matched, ... } result, not the
+      // weapon itself.
+      const found = rivenData.findRivenWeapon(data, entry.weaponName);
+      const weapon = found && found.weapon;
+      if (!weapon) {
+        failed += 1;
+        continue;
+      }
+      const grade = rivenData.gradeRiven(weapon, entry.stats);
+      if (!grade) {
+        failed += 1;
+        continue;
+      }
+      entry.grade = grade.grade;
+      entry.gradeLabel = grade.gradeLabel;
+      entry.score = grade.score;
+      entry.perfectness = grade.perfectnessKnown ? grade.perfectness : null;
+      entry.perfectnessKnown = !!grade.perfectnessKnown;
+      entry.weaponClass = grade.weaponClass || entry.weaponClass;
+      entry.rivenType = weapon.rivenType || entry.rivenType;
+      entry.disposition = weapon.disposition != null ? weapon.disposition : entry.disposition;
+      entry.reqMasteryRank = weapon.reqMasteryRank != null ? weapon.reqMasteryRank : entry.reqMasteryRank;
+      entry.reasons = Array.isArray(grade.reasons) ? grade.reasons.slice(0, 5) : [];
+      updated += 1;
+    } catch (err) {
+      failed += 1;
+    }
+  }
+
+  await writeRivenInventory(entries);
+  return { ok: true, updated, failed, entries };
+});
+
 ipcMain.handle('get-riven-overlay-status', () => {
   return {
     ok: true,
-    enabled: rivenOverlayEnabled,
-    scanning: rivenOverlayScanning,
+    enabled: rivenOverlayEnabled,    scanning: rivenOverlayScanning,
     logPath: rivenOverlayLogPath,
     cachedDisplayId: rivenOverlayCachedDisplayId,
     manualDisplayId: rivenOverlayManualDisplayId,
