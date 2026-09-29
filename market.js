@@ -338,17 +338,19 @@ function saveMarketFilterState() {
   }
 
   function getMarketPanelRefs() {
-    return {
-      topbar: document.querySelector('#market-panel .content-topbar'),
-      categoriesList: $('#market-categories-list'),
-      contractsBtn: $('#market-contracts-btn'),
-      contractsBtnLabel: $('#market-contracts-btn-label'),
-      title: $('#market-panel-title'),
-      count: $('#market-item-count'),
-      grid: $('#market-grid'),
-      contractsView: $('#contracts-view')
-    };
-  }
+      return {
+        panel: $('#market-panel'),
+        topbar: document.querySelector('#market-panel .content-topbar'),
+        categoriesList: $('#market-categories-list'),
+        contractsBtn: $('#market-contracts-btn'),
+        contractsBtnLabel: $('#market-contracts-btn-label'),
+        title: $('#market-panel-title'),
+        count: $('#market-item-count'),
+        grid: $('#market-grid'),
+        contractsView: $('#contracts-view')
+      };
+    }
+
 
   function updateMarketPanelHeader() {
     var refs = getMarketPanelRefs();
@@ -399,6 +401,17 @@ function saveMarketFilterState() {
     var myOrdersBtn = $('#market-my-orders-btn');
     if (myOrdersView) myOrdersView.classList.toggle('hidden', !isMyOrders);
     if (myOrdersBtn) myOrdersBtn.classList.toggle('active', isMyOrders);
+
+    // The panel is tinted per view so the mode is readable at a glance: Contracts
+    // carries the riven palette, because every contract on Warframe.market is a
+    // riven trade. My Orders is deliberately left on the default tint - it is a
+    // management screen, not a trade, and the listing colours already carry
+    // their own meaning there.
+    var panel = refs.panel;
+    if (panel) {
+      panel.classList.toggle('mode-contracts', isContracts);
+      panel.classList.toggle('mode-my-orders', isMyOrders);
+    }
 
     updateMarketPanelHeader();
   }

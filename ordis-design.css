@@ -2531,13 +2531,68 @@ input[type="password"].wfm-input {
 }
 
 /* ============================================================
+   Per-view panel tint
+   ------------------------------------------------------------
+   Contracts reads the riven palette, because every contract on Warframe.market
+   is a riven trade, so the colour tells you what kind of market you are looking
+   at before you read the title. My Orders keeps the default tint: it is a
+   management screen rather than a trade, and the listing colours already carry
+   their own meaning there - tinting it too would compete with them.
+   ============================================================ */
+#market-panel.mode-contracts .category-header,
+#market-panel.mode-contracts .market-categories {
+  background: linear-gradient(180deg,
+      rgba(74, 26, 92, 0.55) 0%,
+      rgba(52, 18, 68, 0.30) 55%,
+      rgba(30, 12, 40, 0) 100%);
+}
+
+#market-panel.mode-contracts .content-topbar::before {
+  background: linear-gradient(180deg,
+      rgba(20, 8, 28, 0.80) 0%,
+      rgba(18, 7, 25, 0.52) 45%,
+      rgba(16, 6, 22, 0.20) 78%,
+      rgba(16, 6, 22, 0) 100%);
+}
+
+#market-panel.mode-contracts .category-title {
+  color: #e7c7ff;
+}
+
+#market-panel.mode-contracts .market-mode-btn.active {
+  color: #f0dcff;
+  background: rgba(150, 80, 210, 0.24);
+  border-color: rgba(190, 130, 240, 0.55);
+}
+
+#market-panel.mode-contracts .contracts-hero,
+#market-panel.mode-contracts .contracts-type-btn.active {
+  border-color: rgba(190, 130, 240, 0.45);
+  background: rgba(150, 80, 210, 0.16);
+  color: #f0dcff;
+}
+
+#market-panel.mode-contracts .market-filter-btn.active,
+#market-panel.mode-contracts .market-cat-btn.active {
+  color: #1a0f22;
+  background: rgba(200, 150, 245, 0.88);
+  border-color: rgba(210, 165, 250, 0.92);
+}
+
+#market-panel.mode-my-orders .category-header {
+  background: linear-gradient(180deg,
+      rgba(6, 11, 16, 0.55) 0%,
+      rgba(6, 11, 16, 0.30) 55%,
+      rgba(6, 11, 16, 0) 100%);
+}
+
+/* ============================================================
    Scrollbars
    ------------------------------------------------------------
    The default bar is drawn flush against the edge of the scroller and then
    clipped by the shell's rounded corners, so it looked like it ran off the
-   window. Insetting it by the same amount as the surrounding padding keeps it
-   clear of the radius, and a thin track reads as part of the glass rather than
-   as a desktop control.
+   window. A thin, inset track reads as part of the glass rather than as a
+   desktop control.
    ============================================================ */
 .market-grid,
 .orders-body,
