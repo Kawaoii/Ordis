@@ -137,6 +137,84 @@ let relicOverlayLogTimer = null;
 let relicOverlayLogPath = '';
 let relicOverlayLogOffset = 0;
 let relicOverlayLogMissingNotified = false;
+/**
+ * Per-stat verdict, resolved here rather than in the renderer because this is
+ * the only place the community sheet's goodStat and acceptableNegative lists
+ * are in scope.
+ *
+ * This is the "which of these rolls are the good ones" judgement the Rivens
+ * detail window shows per line. It is the community's opinion about the weapon,
+ * not a price, and it is the part of AlecaFrame's riven view that comes from
+ * public data.
+ *
+ * A stat with no verdict is reported as unknown rather than assumed harmful:
+ * most players mis-read "not in the good list" as "bad", and for a stat the
+ * sheet does not cover that is simply not known.
+ */
+function describeRivenStatVerdicts(weapon, stats) {
+  if (!weapon || !Array.isArray(stats)) return [];
+  const goodStats = new Set(weapon.goodStats || []);
+  const acceptableNegatives = new Set(weapon.acceptableNegatives || []);
+  const hasCommunityData = Boolean(weapon.hasCommunityData);
+
+  return stats.map((stat) => {
+    const out = { name: stat.name, isPositive: !!stat.isPositive, verdict: 'unknown' };
+    if (!hasCommunityData) return out;
+
+    const key = stat.key || getRivenDataModule().resolveRivenStatKey(stat.name);
+    if (!key) return out;
+
+    if (stat.isPositive) {
+      if (getRivenDataModule().isSpliceTrait(key)) {
+        out.verdict = 'combo';
+        return out;
+      }
+      out.verdict = goodStats.has(key) ? 'good' : 'poor';
+      return out;
+    }
+
+    if (acceptableNegatives.has(key)) out.verdict = 'harmless';
+    else if (weapon.negativeTolerance && !acceptableNegatives.size) out.verdict = 'harmless';
+    else out.verdict = 'harmful';
+    return out;
+  });
+}
+
+/* Reroll history.
+ *
+ * The decision a player is actually making is "is this new roll better than the
+ * one I just threw away", and that comparison needs no market data at all: the
+ * stat panel is read by OCR and the previous read is already in memory. That
+ * matters because dispositions are published for only a few hundred weapons,
+ * so a percentage-based grade is unavailable for plenty of real weapons while
+ * the before/after comparison is always available.
+ *
+ * Keyed by weapon so switching weapons in the mods screen does not show a diff
+ * against an unrelated riven. */
+let rivenLastRoll = null;
+
+function rivenRollKey(weaponName) {
+  const normalized = String(weaponName || '').trim().toLowerCase();
+  return normalized || 'unknown';
+}
+
+function buildRivenRollSummary(parsed, grade) {
+  return {
+    weaponName: parsed.weaponName || '',
+    rivenName: parsed.rivenName || '',
+    stats: parsed.stats.map((s) => ({
+      name: s.name,
+      value: s.value,
+      isPositive: !!s.isPositive
+    })),
+    grade: grade ? grade.grade : '',
+    gradeLabel: grade ? grade.gradeLabel : '',
+    score: grade && grade.score != null ? grade.score : null,
+    perfectness: grade && grade.perfectnessKnown ? grade.perfectness : null,
+    at: Date.now()
+  };
+}
+
 /* ============================================================
    Riven inventory
    ------------------------------------------------------------
@@ -193,6 +271,22 @@ function normalizeRivenInventoryEntry(raw) {
     // because posting a riven under the wrong item is not recoverable by the
     // buyer.
     rivenType: String(raw.rivenType || '').trim(),
+    // Warframe.market's riven weapons list carries an icon for every weapon it
+    // knows. Weapons it does not list (most Prime variants) fall back to the
+    // class riven mod icon in the renderer.
+    icon: String(raw.icon || '').trim(),
+    // Per-stat good/poor/harmless verdict, from the community sheet.
+    statVerdicts: Array.isArray(raw.statVerdicts)
+      ? raw.statVerdicts
+          .filter((v) => v && typeof v === 'object' && v.name)
+          .map((v) => ({
+            name: String(v.name),
+            isPositive: !!v.isPositive,
+            verdict: ['good', 'poor', 'harmless', 'harmful', 'combo', 'unknown'].indexOf(String(v.verdict)) !== -1
+              ? String(v.verdict)
+              : 'unknown'
+          }))
+      : [],
     disposition: Number.isFinite(Number(raw.disposition)) ? Number(raw.disposition) : null,
     reqMasteryRank: Number.isFinite(Number(raw.reqMasteryRank)) ? Number(raw.reqMasteryRank) : null,
     reasons: Array.isArray(grade.reasons) ? grade.reasons.map(String).slice(0, 5) : [],
@@ -1419,6 +1513,12 @@ async function gradeRivenScan(success) {
     success: true,
     parsed: parsed,
     grade: grade,
+    // The roll this one is replacing, for the before/after view. Only set when
+    // it is the same weapon, so switching weapons in the mods screen does not
+    // present an unrelated riven as "your previous roll".
+    previousRoll: null,
+    // Per-stat good/poor verdicts, resolved from the community sheet.
+    statVerdicts: [],
     // Surfaced rather than swallowed: an unresolved stat name usually means the
     // game added an attribute and riven-data.js has not caught up.
     unresolvedStats: parsed.unresolvedStats,
@@ -1435,6 +1535,14 @@ async function gradeRivenScan(success) {
   // Saved to the inventory so the riven is still there once the reroll screen
   // is gone. A failure here must not lose the grade that was just computed.
   try {
+    const summary = buildRivenRollSummary(parsed, grade);
+    const key = rivenRollKey(parsed.weaponName);
+    if (rivenLastRoll && rivenLastRoll.key === key) {
+      result.previousRoll = rivenLastRoll.summary;
+    }
+    rivenLastRoll = { key: key, summary: summary };
+    result.statVerdicts = describeRivenStatVerdicts(weapon, parsed.stats);
+
     const saved = await addRivenToInventory({
       weaponName: parsed.weaponName,
       rivenName: parsed.rivenName,
@@ -1442,7 +1550,9 @@ async function gradeRivenScan(success) {
       grade: grade,
       disposition: weapon && weapon.disposition != null ? weapon.disposition : null,
       reqMasteryRank: weapon && weapon.reqMasteryRank != null ? weapon.reqMasteryRank : null,
-      rivenType: weapon && weapon.rivenType ? weapon.rivenType : null
+      rivenType: weapon && weapon.rivenType ? weapon.rivenType : null,
+      icon: weapon && weapon.icon ? weapon.icon : '',
+      statVerdicts: describeRivenStatVerdicts(weapon, parsed.stats)
     });
     if (saved) result.inventory = { id: saved.entry.id, created: saved.created };
   } catch (err) {

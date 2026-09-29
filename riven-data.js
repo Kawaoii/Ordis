@@ -30,6 +30,24 @@ const RIVEN_WEAPONS_URL = 'https://api.warframe.market/v2/riven/weapons';
  * is recorded on the weapon so the UI can say where it came from. */
 const RIVEN_DISPOSITIONS_FALLBACK_URL = 'https://rivens.wf/api/v1/weapons';
 
+/* Name prefixes and suffixes that mark a variant rather than a distinct weapon
+ * for the purposes of "which stats are good".
+ *
+ * The grade sheet is keyed on base weapon names, so a variant has to be mapped
+ * back to one. This is deliberately a small list of families rather than a
+ * rule: the sheet's judgement is per archetype, and a wrong strip would attach
+ * one weapon's opinion to an unrelated weapon. Every strip is only accepted
+ * when it actually lands on a real sheet entry, so a family that is not in the
+ * sheet simply finds nothing and is reported as unknown.
+ *
+ * "Prime" covers Sisters of Parvos and Coda content too, because almost all of
+ * it ships as a Prime variant of an existing weapon: Furis Prime, Nautilus
+ * Prime, Thrax Prime, Parmelia Prime, Shuriken Prime and so on. The Kuva prefix
+ * covers the lich family, where the sheet lists "Drakgoon" and the market lists
+ * "Kuva Drakgoon". */
+const RIVEN_SHEET_NAME_PREFIXES = ['kuva '];
+const RIVEN_SHEET_NAME_SUFFIXES = [' prime'];
+
 const RIVEN_DATA_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const RIVEN_FETCH_TIMEOUT_MS = 20000;
 
@@ -738,14 +756,35 @@ async function getRivenData(options) {
      * judgement of which stats are good is driven by the archetype, so the base
      * entry is a far better answer than no answer. It is recorded as
      * `base-weapon` so the UI can say the grade came from the base weapon
-     * rather than implying it was measured on the Prime. */
+     * rather than implying it was measured on the Prime.
+     *
+     * The same reasoning covers the "Kuva X" family, where the sheet lists the
+     * base weapon ("Drakgoon", "Karak") and the market lists the Kuva-prefixed
+     * copy. Both are the same weapon with a different drop source, so the
+     * family prefix is stripped too. */
     if (!grade) {
-      const baseKey = key.replace(/ prime$/, '').replace(/^prime /, '');
-      if (baseKey && baseKey !== key) {
-        const baseGrade = sheetGrades.get(baseKey);
+      const fallbacks = [];
+      for (const suffix of RIVEN_SHEET_NAME_SUFFIXES) {
+        if (key.endsWith(suffix)) fallbacks.push(key.slice(0, -suffix.length).trim());
+      }
+      for (const prefix of RIVEN_SHEET_NAME_PREFIXES) {
+        if (key.startsWith(prefix)) fallbacks.push(key.slice(prefix.length).trim());
+        // "Kuva Bramma Prime" is both; stripping the suffix first then the
+        // prefix reaches "Bramma".
+        const withoutPrefix = key.slice(prefix.length).trim();
+        for (const suffix of RIVEN_SHEET_NAME_SUFFIXES) {
+          if (withoutPrefix.endsWith(suffix)) {
+            fallbacks.push(withoutPrefix.slice(0, -suffix.length).trim());
+          }
+        }
+      }
+      for (const candidate of fallbacks) {
+        if (!candidate || candidate === key) continue;
+        const baseGrade = sheetGrades.get(candidate);
         if (baseGrade) {
           grade = baseGrade;
           communityDataFrom = 'base-weapon';
+          break;
         }
       }
     }

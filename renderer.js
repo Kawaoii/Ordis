@@ -7795,15 +7795,15 @@ const visibilityTickHandles = new Set();
       return;
     }
 
-    const parsed = payload.parsed;
-    const grade = payload.grade;
+    const { parsed, grade, previousRoll, statVerdicts } = payload;
     if (!parsed || !Array.isArray(parsed.stats) || !grade) {
       console.log('[RivenOverlay] Ignoring incomplete scan result:', payload);
       return;
     }
     console.log('[RivenOverlay] Scan result received:', { grade: grade.grade, score: grade.score });
 
-    showRivenGradeNotification(parsed, grade, payload.partialCaveat || '');
+    showRivenGradeNotification(parsed, grade, payload.partialCaveat || '',
+      payload.previousRoll || null, payload.statVerdicts || null);
     refreshRivenPanelAfterScan(payload);
   }
 
@@ -7824,29 +7824,59 @@ const visibilityTickHandles = new Set();
     if (existing) existing.remove();
   }
 
-  function showRivenGradeNotification(parsed, grade, caveat) {
-    removeRivenGradeNotification();
-
-    // parseStatLine() reports the sign on isPositive and carries no polarity
-    // glyph, so the marker is derived here rather than read off the stat.
-    const statsHtml = parsed.stats.map(function(s) {
+  function rivenStatRows(stats, verdicts) {
+    return (stats || []).map(function(s) {
       const sign = s.isPositive ? 'positive' : 'negative';
-      const marker = s.isPositive ? '+' : '-';
-      return '<div class="riven-grade-card__stat" data-sign="' + sign + '">' +
+      const verdict = (verdicts || []).filter(function(v) { return v.name === s.name; })[0];
+      const verdictKey = verdict ? verdict.verdict : 'unknown';
+      return '<div class="riven-grade-card__stat" data-sign="' + sign +
+        '" data-verdict="' + verdictKey + '">' +
         '<span class="riven-grade-card__stat-name">' + escapeRivenText(s.name) + '</span>' +
-        '<span class="riven-grade-card__stat-value">' + marker +
+        '<span class="riven-grade-card__stat-value">' + (s.isPositive ? '+' : '-') +
         escapeRivenText(s.value) + '%</span>' +
         '</div>';
     }).join('');
+  }
 
-    // Perfectness is how much of the best possible roll this is, which is the
-    // number people actually compare rivens on. It needs a known weapon
-    // disposition, so it stays hidden rather than shown as zero.
-    let perfectnessHtml = '';
-    if (grade.perfectnessKnown && grade.perfectness != null) {
-      perfectnessHtml = '<span class="riven-grade-card__perfect">' +
-        escapeRivenText(grade.perfectness) + '% of max roll</span>';
-    }
+  function rivenSide(title, summary, verdicts) {
+    if (!summary) return '';
+    const perfect = summary.perfectness != null
+      ? '<span class="riven-grade-card__perfect">' + escapeRivenText(summary.perfectness) + '% of max roll</span>'
+      : '<span class="riven-grade-card__nodata">max roll unknown</span>';
+    return '<div class="riven-grade-card__side">' +
+        '<div class="riven-grade-card__sidehead">' +
+          '<span class="riven-grade-card__eyebrow">' + escapeRivenText(title) + '</span>' +
+          '<span class="riven-grade-card__badge" data-grade="' +
+            escapeRivenText(summary.grade || '?') + '">' + escapeRivenText(summary.grade || '?') + '</span>' +
+        '</div>' +
+        '<div class="riven-grade-card__sidename">' +
+          escapeRivenText(summary.rivenName || summary.weaponName || 'Riven') + '</div>' +
+        '<div class="riven-grade-card__sidemeta">' + perfect +
+          (summary.score != null ? '<span>score ' + escapeRivenText(summary.score) + '</span>' : '') +
+        '</div>' +
+        '<div class="riven-grade-card__stats riven-grade-card__stats--tight">' +
+          rivenStatRows(summary.stats, verdicts) +
+        '</div>' +
+      '</div>';
+  }
+
+  function showRivenGradeNotification(parsed, grade, caveat, previousRoll, verdicts) {
+    removeRivenGradeNotification();
+
+    const current = {
+      weaponName: parsed.weaponName || '',
+      rivenName: parsed.rivenName || '',
+      stats: parsed.stats,
+      grade: grade ? grade.grade : '',
+      gradeLabel: grade ? grade.gradeLabel : '',
+      score: grade && grade.score != null ? grade.score : null,
+      perfectness: grade && grade.perfectnessKnown ? grade.perfectness : null
+    };
+
+    const notification = document.createElement('div');
+    notification.id = 'riven-grade-notification';
+    notification.className = 'riven-grade-card' + (previousRoll ? ' has-diff' : '');
+    notification.setAttribute('role', 'status');
 
     let reasonsHtml = '';
     if (Array.isArray(grade.reasons) && grade.reasons.length) {
@@ -7862,30 +7892,23 @@ const visibilityTickHandles = new Set();
       caveatHtml = '<p class="riven-grade-card__caveat">' + escapeRivenText(caveat) + '</p>';
     }
 
-    const notification = document.createElement('div');
-    notification.id = 'riven-grade-notification';
-    notification.className = 'riven-grade-card';
-    notification.setAttribute('role', 'status');
+    // The before/after view is the part that works for every weapon, including
+    // ones no disposition has ever been published for, because it compares the
+    // two reads and nothing else.
+    const diffBody = previousRoll
+      ? rivenSide('Previous roll', previousRoll, null) +
+        '<div class="riven-grade-card__arrow"><span class="material-icons-round">east</span></div>' +
+        rivenSide('New roll', current, verdicts)
+      : rivenSide('New roll', current, verdicts);
+
     notification.innerHTML =
-      '<div class="riven-grade-card__head">' +
-        '<span class="riven-grade-card__eyebrow">Riven graded</span>' +
-        '<span class="riven-grade-card__badge" data-grade="' +
-          escapeRivenText(grade.grade) + '">' + escapeRivenText(grade.grade) + '</span>' +
-      '</div>' +
-      '<div class="riven-grade-card__meta">' +
-        escapeRivenText(grade.gradeLabel || grade.grade) +
-        ' &middot; score ' + escapeRivenText(grade.score) +
-        perfectnessHtml +
-      '</div>' +
-      '<div class="riven-grade-card__weapon">' +
-        escapeRivenText(parsed.rivenName || parsed.weaponName || 'Riven') + '</div>' +
-      '<div class="riven-grade-card__stats">' + statsHtml + '</div>' +
+      '<div class="riven-grade-card__diff">' + diffBody + '</div>' +
       reasonsHtml +
       caveatHtml;
 
     document.body.appendChild(notification);
 
-    setTimeout(removeRivenGradeNotification, 15000);
+    setTimeout(removeRivenGradeNotification, previousRoll ? 20000 : 15000);
   }
 
   function readFileAsDataUrl(file) {
@@ -17585,25 +17608,36 @@ card.addEventListener('auxclick', function(e) {
   var rivenSearchTerm = '';
   var rivenListFormId = null;
 
-  // Warframe.market sells rivens as one generic item per weapon class, with the
-  // riven's own in-game id passed as the order subtype. That id is not on the
-  // stat panel, so it has to be typed in.
+  /* Which Warframe.market item a riven is posted under.
+   *
+   * There is no "Pistol Riven Mod (Revealed)" item. There is one item per
+   * weapon class and it is named "...(Veiled)" whatever the riven is, and its
+   * only subtypes are `unrevealed` and `revealed`. Verified against
+   * /v2/items: the riven slugs are rifle_riven_mod_veiled, pistol_riven_mod_veiled,
+   * shotgun_riven_mod_veiled, melee_riven_mod_veiled, kitgun_riven_mod_veiled,
+   * zaw_riven_mod_veiled and companion_weapon_riven_mod_veiled.
+   *
+   * The order therefore does not identify a specific riven. Warframe.market has
+   * no field for it, and neither does the order itself. Which riven an order
+   * refers to is agreed and traded in game. */
   var WFM_RIVEN_ITEM_SLUGS = {
-    rifle: 'rifle_riven_mod_(revealed)',
-    shotgun: 'shotgun_riven_mod_(revealed)',
-    pistol: 'pistol_riven_mod_(revealed)',
-    melee: 'melee_riven_mod_(revealed)',
-    kitgun: 'kitgun_riven_mod_(revealed)',
-    zaw: 'zaw_riven_mod_(revealed)'
+    rifle: 'rifle_riven_mod_veiled',
+    shotgun: 'shotgun_riven_mod_veiled',
+    pistol: 'pistol_riven_mod_veiled',
+    melee: 'melee_riven_mod_veiled',
+    kitgun: 'kitgun_riven_mod_veiled',
+    zaw: 'zaw_riven_mod_veiled',
+    archgun: 'companion_weapon_riven_mod_veiled'
   };
 
   var WFM_RIVEN_ITEM_NAMES = {
-    rifle: 'Rifle Riven Mod (Revealed)',
-    shotgun: 'Shotgun Riven Mod (Revealed)',
-    pistol: 'Pistol Riven Mod (Revealed)',
-    melee: 'Melee Riven Mod (Revealed)',
-    kitgun: 'Kitgun Riven Mod (Revealed)',
-    zaw: 'Zaw Riven Mod (Revealed)'
+    rifle: 'Rifle Riven Mod (Veiled)',
+    shotgun: 'Shotgun Riven Mod (Veiled)',
+    pistol: 'Pistol Riven Mod (Veiled)',
+    melee: 'Melee Riven Mod (Veiled)',
+    kitgun: 'Kitgun Riven Mod (Veiled)',
+    zaw: 'Zaw Riven Mod (Veiled)',
+    archgun: 'Companion Weapon Riven Mod (Veiled)'
   };
 
   // Which Warframe.market item a riven is posted under. Warframe.market sells
@@ -17750,18 +17784,16 @@ card.addEventListener('auxclick', function(e) {
         '<div class="riven-row__actions">' +
           (rivenListFormId === entry.id
             ? '<div class="riven-list-form">' +
-                '<label class="riven-list-form__label">Riven id</label>' +
-                '<input class="riven-list-form__input" id="riven-subtype-' + escapeRivenText(entry.id) +
-                  '" placeholder="from the mod card" value="' + escapeRivenText(entry.wfmSubtype || '') + '">' +
-                '<label class="riven-list-form__label">Price</label>' +
+                '<label class="riven-list-form__label" for="riven-price-' + escapeRivenText(entry.id) + '">Price in platinum</label>' +
                 '<input class="riven-list-form__input" id="riven-price-' + escapeRivenText(entry.id) +
                   '" type="number" min="1" placeholder="250" value="' + escapeRivenText(entry.listedPrice || '') + '">' +
                 '<div class="riven-list-form__actions">' +
                   '<button type="button" class="riven-action-btn is-primary" data-riven-action="confirm-list">Post</button>' +
                   '<button type="button" class="riven-action-btn" data-riven-action="cancel-list">Cancel</button>' +
                 '</div>' +
-                '<p class="riven-list-form__hint">Posted as ' +
+                '<p class="riven-list-form__hint">Posts a sell order on ' +
                   escapeRivenText(rivenMarketItemName(classSlug)) +
+                  '. Warframe.market does not record which riven an order is for, so agree the trade in game' +
                   (classConflict ? '. The grade data disagrees about the weapon class.' : '.') +
                 '</p>' +
               '</div>'
@@ -17799,26 +17831,20 @@ card.addEventListener('auxclick', function(e) {
     var entry = findRivenEntry(id);
     if (!entry) return;
 
-    var subtypeInput = document.getElementById('riven-subtype-' + id);
     var priceInput = document.getElementById('riven-price-' + id);
-    var subtype = subtypeInput ? String(subtypeInput.value || '').trim() : entry.wfmSubtype;
     var price = priceInput ? Number(priceInput.value) : entry.listedPrice;
 
-    if (!subtype) {
-      setRivenStatus('Warframe.market needs the riven\'s own id to list it. Open the mod card in game and copy it in.', 'error');
-      return;
-    }
     if (!Number.isFinite(price) || price < 1) {
       setRivenStatus('Enter a price in platinum before posting.', 'error');
       return;
     }
 
-    var slug = WFM_RIVEN_ITEM_SLUGS[rivenMarketClass(entry)];
+    var marketClass = rivenMarketClass(entry);
+    var slug = WFM_RIVEN_ITEM_SLUGS[marketClass];
     if (!slug) {
       setRivenStatus('The weapon class for this riven is unknown, so the market item could not be chosen.', 'error');
       return;
     }
-    var marketClass = rivenMarketClass(entry);
     if (entry.rivenType && entry.weaponClass && entry.rivenType !== entry.weaponClass) {
       setRivenStatus('Warframe.market lists this weapon as ' + rivenMarketItemName(marketClass) +
         ' while the grade data calls it ' + rivenMarketItemName(entry.weaponClass) +
@@ -17842,9 +17868,16 @@ card.addEventListener('auxclick', function(e) {
         setRivenStatus('Warframe.market does not have an item for ' + rivenMarketItemName(marketClass) + '.', 'error');
         return;
       }
-      if (Array.isArray(item.subtypes) && item.subtypes.length && item.subtypes.indexOf(subtype) === -1) {
-        setRivenStatus('Warframe.market does not list riven id "' + subtype + '" on that account yet. ' +
-          'Double-check the id, and make sure the riven is actually in your inventory.', 'error');
+      // The only subtypes this item accepts are `unrevealed` and `revealed`.
+      // There is no per-riven id, so a scanned riven's stats cannot be attached
+      // to the order. The subtype says the stats are visible, and which riven
+      // this actually is gets agreed and traded in game.
+      var supported = Array.isArray(item.subtypes) ? item.subtypes : [];
+      var subtype = supported.indexOf('revealed') !== -1
+        ? 'revealed'
+        : (supported.indexOf('unrevealed') !== -1 ? 'unrevealed' : (supported[0] || null));
+      if (!subtype) {
+        setRivenStatus('That market item takes no subtype, so the order was not sent.', 'error');
         return;
       }
 
@@ -17865,7 +17898,8 @@ card.addEventListener('auxclick', function(e) {
       }
       rivenListFormId = null;
       renderRivenInventory();
-      setRivenStatus('Listed for ' + price + ' platinum.', 'ok');
+      setRivenStatus('Listed for ' + price + ' platinum as ' + rivenMarketItemName(marketClass) +
+        '. Warframe.market does not attach the riven stats, so send the trade string when someone buys it.', 'ok');
     } catch (err) {
       setRivenStatus('Could not list the riven: ' + (err && err.message ? err.message : 'unknown error'), 'error');
     }
