@@ -1744,7 +1744,6 @@
         
         <div class="wfm-tabs">
           <button class="wfm-tab-btn active" id="wfm-tab-jwt-btn" type="button">JWT Token (Recommended)</button>
-          <button class="wfm-tab-btn" id="wfm-tab-credentials-btn" type="button">Email & Password</button>
         </div>
 
         <!--
@@ -1773,17 +1772,15 @@
           <button class="btn btn-primary wfm-submit-btn" id="wfm-submit-jwt" type="button">Connect with Token</button>
         </div>
 
-        <div class="wfm-tab-content hidden" id="wfm-tab-credentials-content">
-          <div class="form-group">
-            <label for="wfm-email-input" class="wfm-label">Email Address</label>
-            <input type="email" id="wfm-email-input" class="wfm-input" placeholder="Enter account email...">
-          </div>
-          <div class="form-group">
-            <label for="wfm-password-input" class="wfm-label">Password</label>
-            <input type="password" id="wfm-password-input" class="wfm-input" placeholder="Enter account password...">
-          </div>
-          <button class="btn btn-primary wfm-submit-btn" id="wfm-submit-credentials" type="button">Connect with Credentials</button>
-        </div>
+        <!--
+          There is deliberately no email-and-password form. Warframe.market's
+          /auth/signin endpoint is first-party only and requires Firebase App
+          Check, and OAuth 2.0 is not open to public integrations, so no
+          third-party app can sign in that way. The previous implementation
+          scraped the login page while pretending to be Chrome, which their
+          rules forbid and which Cloudflare is built to block, so it could only
+          ever fail. The browser window above is the supported route.
+        -->
 
         <div class="wfm-login-status" id="wfm-login-status"></div>
       </div>

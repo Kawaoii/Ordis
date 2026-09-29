@@ -30,7 +30,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resetWarframeLogPath: () => ipcRenderer.invoke('reset-warframe-log-path'),
   fetchWarframeProfile: (manualAccountId, platform) => ipcRenderer.invoke('fetch-warframe-profile', String(manualAccountId || ''), String(platform || '')),
   scanImageForItems: (imageDataUrl) => ipcRenderer.invoke('scan-image-for-items', String(imageDataUrl || '')),
-  wfmLoginCredentials: (email, password) => ipcRenderer.invoke('wfm-login-credentials', String(email || ''), String(password || '')),
   wfmLoginBrowser: () => ipcRenderer.invoke('wfm-login-browser'),
   wfmLoginCancel: () => ipcRenderer.invoke('wfm-login-cancel'),
   wfmFetch: (url, options) => ipcRenderer.invoke('wfm-fetch', String(url || ''), options || {}),

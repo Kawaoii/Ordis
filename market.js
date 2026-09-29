@@ -5301,34 +5301,6 @@ function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
     }
   }
 
-  async function connectWfmWithCredentials(email, password) {
-    var statusEl = $('#wfm-login-status');
-    if (statusEl) {
-      statusEl.className = 'wfm-login-status loading';
-      statusEl.textContent = 'Connecting to warframe.market...';
-    }
-
-    try {
-      if (typeof window.electronAPI === 'undefined' || typeof window.electronAPI.wfmLoginCredentials !== 'function') {
-        throw new Error('Electron API bridge not available.');
-      }
-
-      var res = await window.electronAPI.wfmLoginCredentials(email, password);
-
-      if (!res.ok) {
-        throw new Error(res.message || 'Signin failed.');
-      }
-
-      return adoptWfmSession(res.token, res.user);
-    } catch (err) {
-      if (statusEl) {
-        statusEl.className = 'wfm-login-status error';
-        statusEl.textContent = 'Failed: ' + err.message;
-      }
-      return false;
-    }
-  }
-
   function disconnectWfm() {
     wfmSession.token = null;
     wfmSession.user = null;
@@ -6199,28 +6171,10 @@ function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
       loginCloseBtn.addEventListener('click', closeWfmLoginModal);
     }
 
-    // Modal Tabs
-    var tabJwtBtn = $('#wfm-tab-jwt-btn');
-    var tabCredBtn = $('#wfm-tab-credentials-btn');
-    var tabJwtContent = $('#wfm-tab-jwt-content');
-    var tabCredContent = $('#wfm-tab-credentials-content');
-
-    if (tabJwtBtn && tabCredBtn && tabJwtContent && tabCredContent) {
-      tabJwtBtn.addEventListener('click', function () {
-        tabJwtBtn.classList.add('active');
-        tabCredBtn.classList.remove('active');
-        tabJwtContent.classList.remove('hidden');
-        tabCredContent.classList.add('hidden');
-      });
-      tabCredBtn.addEventListener('click', function () {
-        tabCredBtn.classList.add('active');
-        tabJwtBtn.classList.remove('active');
-        tabCredContent.classList.remove('hidden');
-        tabJwtContent.classList.add('hidden');
-      });
-    }
-
     // Modal Form Submits
+    //
+    // These were previously bound twice, in two identical blocks, and the second
+    // one also re-bound the credentials submit that no longer exists.
     var submitJwtBtn = $('#wfm-submit-jwt');
     if (submitJwtBtn) {
       submitJwtBtn.addEventListener('click', function () {
@@ -6234,48 +6188,6 @@ function createOrdersPartChip(part, setGroup, activeItem, isFirst) {
       });
     }
 
-    var submitCredBtn = $('#wfm-submit-credentials');
-    if (submitCredBtn) {
-      submitCredBtn.addEventListener('click', function () {
-        var emailInput = $('#wfm-email-input');
-        var passInput = $('#wfm-password-input');
-        var email = emailInput ? String(emailInput.value || '').trim() : '';
-        var pass = passInput ? String(passInput.value || '') : '';
-        if (!email || !pass) {
-          alert('Please enter both email and password.');
-          return;
-        }
-        connectWfmWithCredentials(email, pass);
-      });
-    }
-    // Modal Form Submits
-    var submitJwtBtn = $('#wfm-submit-jwt');
-    if (submitJwtBtn) {
-      submitJwtBtn.addEventListener('click', function () {
-        var jwtInput = $('#wfm-jwt-input');
-        var token = jwtInput ? String(jwtInput.value || '').trim() : '';
-        if (!token) {
-          alert('Please enter a JWT token.');
-          return;
-        }
-        connectWfmWithToken(token);
-      });
-    }
-
-    var submitCredBtn = $('#wfm-submit-credentials');
-    if (submitCredBtn) {
-      submitCredBtn.addEventListener('click', function () {
-        var emailInput = $('#wfm-email-input');
-        var passInput = $('#wfm-password-input');
-        var email = emailInput ? String(emailInput.value || '').trim() : '';
-        var pass = passInput ? String(passInput.value || '') : '';
-        if (!email || !pass) {
-          alert('Please enter both email and password.');
-          return;
-        }
-        connectWfmWithCredentials(email, pass);
-      });
-    }
     var browserLoginBtn = $('#wfm-browser-login');
     if (browserLoginBtn) {
       // Recoverable failures no longer end this call, so the main process pushes
