@@ -1,6 +1,9 @@
 const { app, BrowserWindow, ipcMain, shell, dialog, desktopCapturer, screen } = require('electron');
 const path = require('path');
 const fs = require('fs/promises');
+// Promises for the work, sync only for the two existence checks that decide where a
+// bundled script lives, which have to be answered before anything can be awaited.
+const fsSync = require('fs');
 const crypto = require('crypto');
 const { execFile } = require('child_process');
 
@@ -1882,6 +1885,160 @@ function getRivenCandidateDisplayIds() {
  * the text, and the engine's TryCreateFromUserProfileLanguages() would follow the
  * Windows display language instead, which read an English card badly on a German
  * desktop. */
+/* ===========================================================================
+   RIVEN MEMORY READER
+   ===========================================================================
+   Warframe keeps each riven's summary in its own process memory as one plain
+   string: the weapon name, every stat with its signed value, the mastery rank
+   and the weapon class. That is exact data, so it removes OCR from the path
+   entirely, which is the point: the one failure this reader must never have is a
+   confidently wrong number.
+
+   Read-only. Opens the client for PROCESS_VM_READ and nothing else: no writes,
+   no injection, no code in the game, nothing sent anywhere. It is the same
+   technique class as warframe-api-helper, which reads the login ticket the same
+   way.
+
+   Windows only, because it uses Win32. Everything else in the app is portable
+   and this is the one piece that is not; see docs/FEATURE-NOTES.md.
+   --------------------------------------------------------------------------- */
+
+const RIVEN_MEMORY_SCRIPT = 'riven-scan.ps1';
+const RIVEN_MEMORY_TIMEOUT_MS = 120000;
+// Rivens do not change while the game sits idle, and a full walk of the address
+// space is not free, so a rescan sooner than this is refused rather than queued.
+const RIVEN_MEMORY_MIN_INTERVAL_MS = 60 * 1000;
+
+let rivenMemoryLastScan = null;
+let rivenMemoryInFlight = null;
+
+/**
+ * Resolve a bundled script to a real path on disk.
+ *
+ * A packaged build puts main.js inside app.asar, and a child process cannot read a
+ * file out of an asar archive: it would fail on the path, every scan would error,
+ * and the reader would look permanently broken while reporting nothing. So a
+ * packaged copy is unpacked to temp once and reused.
+ */
+async function resolveBundledScript(name) {
+  const candidates = [path.join(__dirname, name), path.join(__dirname, 'tools', name)];
+  const packed = candidates.find((p) => fsSync.existsSync(p));
+  if (!packed) return '';
+
+  // In a packaged build main.js sits inside app.asar, and a child process cannot read a
+  // file out of an asar archive. It would fail on the path every single time, so the
+  // reader would look permanently broken while reporting nothing useful. Copy it out
+  // once to temp and reuse that.
+  if (packed.indexOf('app.asar') === -1) return packed;
+
+  const unpacked = path.join(app.getPath('temp'), 'ordis-scripts', name);
+  try {
+    await fs.mkdir(path.dirname(unpacked), { recursive: true });
+    await fs.writeFile(unpacked, await fs.readFile(packed));
+    return unpacked;
+  } catch (err) {
+    return '';
+  }
+}
+
+/**
+ * Read the player's rivens out of game memory.
+ *
+ * Never throws. A failed read is a missing feature for a moment, not a broken app,
+ * so every failure path returns { ok: false, reason } and the caller decides what to
+ * tell the player.
+ */
+async function scanRivensFromMemory(options) {
+  const settings = options || {};
+  if (process.platform !== 'win32') {
+    return { ok: false, reason: 'unsupported-platform', message: 'Reading game memory is Windows only for now.' };
+  }
+
+  const now = Date.now();
+  if (!settings.force && rivenMemoryLastScan && now - rivenMemoryLastScan.at < RIVEN_MEMORY_MIN_INTERVAL_MS) {
+    return Object.assign({}, rivenMemoryLastScan, { cached: true });
+  }
+  // Two scans at once would double the memory traffic for no gain, and the second
+  // would return a half-finished picture.
+  if (rivenMemoryInFlight) return rivenMemoryInFlight;
+
+  rivenMemoryInFlight = (async () => {
+    const script = await resolveBundledScript(RIVEN_MEMORY_SCRIPT);
+    if (!script) return { ok: false, reason: 'script-missing' };
+
+    const outFile = path.join(app.getPath('temp'), 'ordis-riven-memory.json');
+    const run = await execFileAsync('powershell', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+      '-Out', outFile,
+      '-MaxSeconds', String(settings.maxSeconds || 90)
+    ], RIVEN_MEMORY_TIMEOUT_MS);
+
+    let payload = null;
+    try {
+      payload = JSON.parse(await fs.readFile(outFile, 'utf8'));
+    } catch (err) {
+      // The script also prints its result, so fall back to that if the file is missing
+      // or was never written. execFileAsync resolves on non-zero exit too, which is
+      // exactly the shape of a "game is not running" result.
+      try {
+        payload = JSON.parse(String(run.stdout || '').trim());
+      } catch (err2) {
+        payload = null;
+      }
+    }
+    if (!payload || payload.error) {
+      return {
+        ok: false,
+        reason: payload && payload.error ? 'game-not-running' : 'no-output',
+        message: payload && payload.error ? payload.error : 'The reader produced no output.',
+        detail: run.message || ''
+      };
+    }
+
+    // Parsed through the same parser the OCR path uses, so a riven read from memory
+    // and one read from the screen go down one code path and cannot drift apart.
+    const parser = getRivenParserModule();
+    const entries = [];
+    const seen = new Set();
+    for (const block of payload.rivens || []) {
+      let parsed = null;
+      try {
+        parsed = parser.parseRivenOcr(block.text);
+      } catch (err) {
+        parsed = null;
+      }
+      if (!parsed || !parsed.stats || !parsed.stats.length) continue;
+      const key = parsed.stats.map((s) => s.name + ':' + Math.round(s.value * 10)).sort().join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      entries.push({
+        text: block.text,
+        stats: parsed.stats,
+        weaponName: parsed.weaponName || '',
+        weaponNameCandidates: parsed.weaponNameCandidates || [],
+        masterRank: parsed.masterRank,
+        warnings: parsed.warnings || []
+      });
+    }
+
+    rivenMemoryLastScan = {
+      ok: true,
+      at: now,
+      entries,
+      scannedMs: payload.scannedMs,
+      mbPerSec: payload.mbPerSec,
+      timedOut: !!payload.timedOut
+    };
+    return rivenMemoryLastScan;
+  })();
+
+  try {
+    return await rivenMemoryInFlight;
+  } finally {
+    rivenMemoryInFlight = null;
+  }
+}
+
 const RIVEN_WIN_OCR_LANGUAGE = 'en-US';
 // A stat line always carries a number next to a sign, percent or multiplier. Used only
 // to decide whether a read is worth trusting, never to grade: grading is the parser's
@@ -3954,6 +4111,13 @@ ipcMain.handle('set-riven-overlay-enabled', async (_event, enabled) => {
 ipcMain.handle('riven-inventory-list', async () => {
   const entries = await readRivenInventory();
   return { ok: true, entries };
+});
+
+/* Reads the player's rivens straight out of game memory. Kept separate from the
+ * inventory handlers because it is a read of the running game rather than of a file,
+ * it only works on Windows, and it is slow enough to want an explicit trigger. */
+ipcMain.handle('riven-memory-scan', async (_event, options) => {
+  return scanRivensFromMemory(options || {});
 });
 
 ipcMain.handle('riven-inventory-add', async (_event, entry) => {

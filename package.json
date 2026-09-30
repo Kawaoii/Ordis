@@ -77,7 +77,8 @@
       "starchart.js",
       "riven-data.js",
       "riven-parser.js",
-      "assets/**/*"
+      "assets/**/*",
+      "tools/**/*"
     ]
   },
   "allowScripts": {
