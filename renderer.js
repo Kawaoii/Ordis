@@ -15719,7 +15719,19 @@ card.addEventListener('auxclick', function(e) {
     }
     els.tradeModeBtn.classList.toggle('active', tradeModeEnabled);
     els.tradeModeBtn.setAttribute('aria-pressed', tradeModeEnabled ? 'true' : 'false');
+
+    /* The rail's Trade button lights with the state, or it reads as a tab you are
+     * currently in rather than a switch you have thrown. An action tab has no panel to be
+     * active in, so its on/off has to be stated outright. */
+    if (window.OrdisDock && typeof window.OrdisDock.setActionState === 'function') {
+      window.OrdisDock.setActionState('trade', tradeModeEnabled);
+    }
   }
+
+  /* The dock's Trade tab and the titlebar button are the same control, so the toggle is
+     exposed rather than reimplemented - otherwise the two would drift on what trade mode
+     actually does. */
+  window.OrdisTradeModeToggle = toggleTradeMode;
 
   async function toggleTradeMode() {
     try {
@@ -17179,6 +17191,43 @@ card.addEventListener('auxclick', function(e) {
    * without a second copy of several hundred mod entries to keep in step. */
   var PANEL_VIEWS = { mods: { category: 'Mods', owner: 'checklist' } };
 
+  /* Market and Analytics are two lists over the same orders.
+   *
+   * Analytics had its own rail icon, which made it look like a third destination next to
+   * Market. It is not one: it is the same orders read a different way, and the market
+   * panel has already fetched and parsed them. So it is a switch inside the market, and
+   * both halves report as the `market` panel to everything that tracks what is open. */
+  var currentMarketView = 'list';
+
+  function setMarketView(view) {
+    currentMarketView = view === 'analytics' ? 'analytics' : 'list';
+    var list = $('#market-panel');
+    var analytics = $('#trade-analytics-panel');
+    if (list) list.classList.toggle('hidden', currentMarketView !== 'list');
+    if (analytics) analytics.classList.toggle('hidden', currentMarketView !== 'analytics');
+    $$('.market-view-btn').forEach(function (b) {
+      var on = b.dataset.marketView === currentMarketView;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+  }
+
+  $$('.market-view-btn').forEach(function (b) {
+    b.addEventListener('click', function () {
+      setMarketView(b.dataset.marketView);
+      /* Switching halves while the market is closed should not also open it: the button
+         is a view, not a navigation. If the market is not on screen, just remember the
+         choice and leave the player where they are. */
+      var list = $('#market-panel');
+      var analytics = $('#trade-analytics-panel');
+      var open = currentMarketView === 'analytics' ? analytics : list;
+      var other = currentMarketView === 'analytics' ? list : analytics;
+      if (open && !other && (other.classList.contains('hidden'))) {
+        if (open.classList.contains('hidden')) showPanel('market', false);
+      }
+    });
+  });
+
   function panelView(panel) { return PANEL_VIEWS[panel] || null; }
   function panelOwner(panel) { var v = panelView(panel); return v ? v.owner : panel; }
 
@@ -17196,6 +17245,7 @@ card.addEventListener('auxclick', function(e) {
     if (refs.prime && !refs.prime.classList.contains('hidden')) return 'prime';
     if (refs.analytics && !refs.analytics.classList.contains('hidden')) return 'analytics';
     if (refs.market && !refs.market.classList.contains('hidden')) return 'market';
+    if (refs.analytics && !refs.analytics.classList.contains('hidden')) return 'market';
     /* The grid is up and the rail is on Mods, so the Mods tab is what the player is
      * looking at, even though the visible element is Equipment's. Without this the strip
      * highlighted Equipment while the grid showed nothing but mods. */
@@ -17654,6 +17704,14 @@ card.addEventListener('auxclick', function(e) {
     // is read when the tab is opened rather than kept live.
     if (panel === 'rivens') {
       loadRivenInventory(false);
+    }
+
+    /* Market carries two halves, and the visibility pass only ever shows the list. Left
+     * alone it would undo the Analytics choice every time the tab was opened, so the
+     * chosen half is re-applied after the pass has run. */
+    if (panel === 'market') {
+      applyPanelVisibility('market', refs);
+      setMarketView(currentMarketView);
     }
 
     if (panelSwitchInProgress || !smooth || currentName === panel) {

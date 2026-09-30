@@ -4681,3 +4681,63 @@ body.has-split-rail .settings-content { padding-bottom: 0 !important; }
     padding-bottom: 5px;
   }
 }
+
+/* Market / Analytics switch.
+   Two halves of one place, so they sit together at the end of the market's own topbar
+   rather than as two icons in the rail, where Analytics looked like a destination of its
+   own. Tabs rather than buttons, because that is what they are: one panel, two views. */
+.market-view-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--border-color);
+  flex: 0 0 auto;
+}
+
+.market-view-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  padding: 5px 13px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.market-view-btn:hover { color: var(--text-primary); }
+
+.market-view-btn.active {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text-primary);
+}
+
+.market-view-btn:focus-visible {
+  outline: 2px solid var(--accent-color, #6ee7b7);
+  outline-offset: 1px;
+}
+
+/* In a split pane the switch has to give up before the search box does. */
+@container pane (max-width: 520px) {
+  .market-view-btn { padding: 5px 9px; font-size: 11px; }
+}
+
+/* A rail tab for a switch rather than a page: lit while it is on.
+   The active style is a filled rounded square, which would claim "you are here". Trade
+   mode is never anywhere, so it gets a border and a glow instead - on, but not current. */
+.dock-tab.is-on {
+  border-color: rgba(110, 231, 183, 0.55);
+  box-shadow: 0 0 0 1px rgba(110, 231, 183, 0.28), 0 0 14px rgba(110, 231, 183, 0.22);
+}
+
+.dock-tab.is-on .dock-tab-icon,
+.dock-tab.is-on .dock-tab-art {
+  color: #6ee7b7;
+  filter: drop-shadow(0 0 6px rgba(110, 231, 183, 0.6));
+}

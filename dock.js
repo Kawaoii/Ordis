@@ -47,7 +47,17 @@
    * same picture and hides which one the player is in. The items the game itself gives a
    * face to - a Void Trace, an Argon Crystal, a riven - use its art, the same way the
    * Archgun and Amp categories already do. */
+  /* The rail is read top to bottom, so the order here is the order the player meets.
+   *
+   * It was: Equipment, Market, Analytics, Prime Resurgence, Relics, Arcanes, Rivens,
+   * Cycles, Compare, Recommendations, Resources, Settings - which is roughly where each
+   * panel was written rather than where anyone would look for it. Market is what a
+   * Warframe player opens most and was second; Rivens, which took the longest to build,
+   * was seventh. The tools that act on the session rather than open a place (trade mode)
+   * and the panel you only go to deliberately (Settings) sit at the bottom, where a
+   * destructive or infrequent action belongs. */
   var PANELS = [
+    { id: 'market', label: 'Market', icon: 'storefront', el: '#market-panel', nav: '#nav-market', minW: 480, minH: 300 },
     { id: 'checklist', label: 'Equipment', icon: 'sports_martial_arts', el: '#content', nav: null, minW: 520, minH: 320 },
     /* Mods is a view of the item grid, not a second copy of it.
      *
@@ -58,20 +68,23 @@
      * over. `view` is also why it is not torn off: there is only one grid, so there is
      * nothing separate to put in a window. */
     { id: 'mods', label: 'Mods', icon: 'extension', el: '#content', nav: null, minW: 520, minH: 320, view: { category: 'Mods' } },
-    { id: 'market', label: 'Market', icon: 'storefront', el: '#market-panel', nav: '#nav-market', minW: 480, minH: 300 },
-    { id: 'analytics', label: 'Analytics', icon: 'insights', el: '#trade-analytics-panel', nav: '#nav-trade-analytics', minW: 460, minH: 300 },
-    { id: 'prime', label: 'Prime Resurgence', icon: 'workspace_premium', el: '#prime-panel', nav: '#nav-prime-resurgence', minW: 440, minH: 280 },
-    // The relic the player is actually holding, not a decorative box.
-    { id: 'relics', label: 'Relics', icon: 'assets/void-trace.png', fallbackIcon: 'filter_vintage', el: '#relics-panel', nav: '#nav-relics', minW: 440, minH: 300 },
-    { id: 'arcanes', label: 'Arcanes', icon: 'auto_awesome', el: '#arcanes-panel', nav: '#nav-arcanes', minW: 440, minH: 300 },
     // The riven rune itself. The "extension" mod glyph is what this used to be, which is
     // why Rivens and Mods looked like the same tab.
     { id: 'rivens', label: 'Rivens', icon: 'assets/riven-rune.png', fallbackIcon: 'extension', el: '#riven-panel', nav: null, minW: 460, minH: 340 },
-    { id: 'cycles', label: 'Cycles', icon: 'cyclone', el: '#cycles-panel', nav: '#nav-cycles', minW: 420, minH: 300 },
+    { id: 'arcanes', label: 'Arcanes', icon: 'auto_awesome', el: '#arcanes-panel', nav: '#nav-arcanes', minW: 440, minH: 300 },
+    // The relic the player is actually holding, not a decorative box.
+    { id: 'relics', label: 'Relics', icon: 'assets/void-trace.png', fallbackIcon: 'filter_vintage', el: '#relics-panel', nav: '#nav-relics', minW: 440, minH: 300 },
     { id: 'compare', label: 'Compare', icon: 'compare_arrows', el: '#compare-panel', nav: '#nav-compare', minW: 480, minH: 320 },
     { id: 'recommendations', label: 'Recommendations', icon: 'lightbulb', el: '#recommendations-panel', nav: '#nav-mastery-recommendations', minW: 460, minH: 320 },
     // Argon Crystal, the resource every relic run is chasing.
     { id: 'resources', label: 'Resources', icon: 'assets/argon-crystal.png', fallbackIcon: 'hardware', el: '#resource-search-panel', nav: '#nav-resource-search', minW: 420, minH: 300 },
+    // Bottom of the rail: the tools, not the places.
+    { id: 'cycles', label: 'Cycles', icon: 'cyclone', el: '#cycles-panel', nav: '#nav-cycles', minW: 420, minH: 300 },
+    { id: 'prime', label: 'Prime Resurgence', icon: 'workspace_premium', el: '#prime-panel', nav: '#nav-prime-resurgence', minW: 440, minH: 280 },
+    /* Trade mode toggles the session rather than opening a place, so it has no panel and
+     * no element - it is a rail button that flips a flag. `action` is what tells the dock
+     * that, and stops it trying to show a panel that does not exist. */
+    { id: 'trade', label: 'Trade Mode', icon: 'picture_in_picture_alt', el: null, nav: null, action: 'trade' },
     { id: 'settings', label: 'Settings', icon: 'settings', el: '#settings-page', nav: null, minW: 480, minH: 320 }
   ];
 
@@ -83,8 +96,16 @@
   var SNAP_TOLERANCE = 0.045; // ~4.5% of the workspace, generous enough to feel magnetic
   var DRAG_THRESHOLD = 5; // px before a press can become a drag
   var TEAR_OFF_MARGIN = 90; // px below the strip before a drag counts as a tear-off
-  var STORE_KEY = 'ordis.dock.v1';
-  var CAT_STORE_KEY = 'ordis.dock.categories.v1';
+  /* Bumped when the default order changes, which is the only way a reorder reaches
+     anyone who has already run the app: the arrangement is saved per installation, and
+     an old saved order outranks the list below, so reordering PANELS on its own changes
+     nothing for an existing install - the tabs came back exactly as they were, in the old
+     order, with the new Trade tab appended to the end of it. Versioning the key takes the
+     new order once, and the player's own dragging still wins from then on, which is the
+     part worth keeping. */
+  var STORE_KEY = 'ordis.dock.v2';
+  var CAT_STORE_KEY = 'ordis.dock.categories.v2';
+
 
   var byId = {};
   PANELS.forEach(function (p) { byId[p.id] = p; });
@@ -120,9 +141,22 @@
 
     if (Array.isArray(saved.order)) {
       var valid = saved.order.filter(function (id) { return !!byId[id]; });
-      PANELS.forEach(function (p) { if (valid.indexOf(p.id) === -1) valid.push(p.id); });
+      /* New panels are inserted where the panel list puts them, not appended.
+       *
+       * Appending is what put Trade Mode below Settings, under everything, when it belongs
+       * above it: the saved order was complete, so the new id had no neighbours to be
+       * placed against. Walking the list and dropping each missing id in after whatever
+       * precedes it in the default order keeps a new tab next to the tabs it belongs with,
+       * and still leaves the player's own arrangement alone everywhere else. */
+      PANELS.forEach(function (p, i) {
+        if (valid.indexOf(p.id) !== -1) return;
+        var after = PANELS.slice(0, i).reverse().find(function (q) { return valid.indexOf(q.id) !== -1; });
+        var at = after ? valid.indexOf(after.id) + 1 : 0;
+        valid.splice(at, 0, p.id);
+      });
       state.order = valid;
     }
+
     if (saved.floats && typeof saved.floats === 'object') {
       Object.keys(saved.floats).forEach(function (id) {
         var f = saved.floats[id];
@@ -439,8 +473,10 @@
      setTabMeta when a count arrives later. Building the string twice is how the two
      drifted, with the count quietly vanishing from the hover after a redraw. */
   function tabTitle(panel) {
+    var state = '';
+    if (panel.action) state = ' - ' + (panel.actionOn ? panel.label + ' is on' : panel.label + ' is off');
     return panel.label + ' - press and hold to rearrange' +
-      (panel.note ? ' (' + panel.note + ')' : '');
+      (panel.note ? ' (' + panel.note + ')' : '') + state;
   }
 
   function buildTab(panel) {
@@ -574,7 +610,21 @@
   }
 
   function focus(id) {
-    if (!byId[id]) return;
+    var panel = byId[id];
+    if (!panel) return;
+
+    /* An action tab does something instead of opening something.
+     *
+     * Trade mode flips a flag and leaves you wherever you are, so it must not become the
+     * active panel, must not hide the panel behind it, and must not survive a restart as
+     * the app's last place - there is no place to go back to. The toggle is delegated to
+     * the renderer, which is where the trade state and its button already live, so the
+     * control keeps working whether it is pressed in the rail or the titlebar. */
+    if (panel.action === 'trade') {
+      if (typeof window.OrdisTradeModeToggle === 'function') window.OrdisTradeModeToggle();
+      return;
+    }
+
     state.active = id;
     save();
     syncActive();
@@ -1482,6 +1532,22 @@
       if (note) panel.note = note; else delete panel.note;
       if (!dom.tabs || !dom.tabs[id]) return;
       var tab = dom.tabs[id];
+      tab.title = tabTitle(panel);
+    },
+
+    /* Show an action tab as thrown, and say so in its tooltip.
+     *
+     * An action tab is never the active panel - it does not open one - so `active` would
+     * be a lie here. The lit state is what tells the player the switch is on, and the
+     * tooltip is what tells them which way it is, since an icon alone cannot. */
+    setActionState: function (id, on) {
+      var panel = byId[id];
+      if (!panel) return;
+      panel.actionOn = !!on;
+      var tab = dom.tabs && dom.tabs[id];
+      if (!tab) return;
+      tab.classList.toggle('is-on', !!on);
+      tab.setAttribute('aria-pressed', on ? 'true' : 'false');
       tab.title = tabTitle(panel);
     },
 

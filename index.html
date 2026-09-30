@@ -38,15 +38,6 @@
           <span class="material-icons-round">restart_alt</span>
           <span class="nav-text">Reset All</span>
         </button>
-          <button class="nav-item nav-tool nav-update-item" id="btn-main-menu-update" type="button"
-          title="Use this button to check for or download new versions.">
-          <span class="material-icons-round" id="main-menu-update-icon">system_update_alt</span>
-          <span class="nav-meta">
-            <span class="nav-text" id="main-menu-update-text">Check for Updates</span>
-            <span class="nav-subtext" id="main-menu-update-details">Use this button to check for or download new
-              versions.</span>
-          </span>
-        </button>
         </div>
 
         <div class="titlebar-controls">
@@ -242,13 +233,21 @@
       <div class="content-topbar">
         <div class="search-container">
           <span class="material-icons-round search-icon">search</span>
-          <input type="text" class="search-input" id="market-search-input" placeholder="Search market items..."
-            autocomplete="off">
+          <input type="text" class="search-input" id="market-search-input" placeholder="Search market items..." autocomplete="off">
           <button class="search-clear hidden" id="market-search-clear">
             <span class="material-icons-round">close</span>
           </button>
         </div>
+        <!-- Analytics reads the same orders as the market list, so it is a switch inside
+             the market rather than a tab beside it: it was the third icon in the rail,
+             where it read as a third place to go, and its panel shares everything the
+             market panel already has loaded. -->
+        <div class="market-view-switch" role="tablist" aria-label="Market views">
+          <button class="market-view-btn active" data-market-view="list" role="tab" type="button">Market</button>
+          <button class="market-view-btn" data-market-view="analytics" role="tab" type="button">Analytics</button>
+        </div>
       </div>
+
 
       <!-- Market Categories -->
       <div class="market-categories">
@@ -1396,6 +1395,23 @@
 
         <div class="settings-card">
           <h2 class="settings-card-title">Project</h2>
+          <!-- Check for Updates used to sit in the titlebar with Trade Mode, the MR
+               Calculator and Reset All. It is the one of those four that is about the app
+               rather than about this session, so it lives with the repository and the
+               issue tracker it actually acts on. The element keeps its id, because the
+               main process drives the button by id and a renamed control is a control that
+               silently stops updating. -->
+          <div class="settings-action-row">
+            <div>
+              <div class="settings-toggle-title">Check for Updates</div>
+              <div class="settings-toggle-subtitle" id="main-menu-update-details">Look on GitHub for a newer version of this app.</div>
+            </div>
+            <button class="btn btn-secondary settings-link-btn" id="btn-main-menu-update" type="button"
+              title="Use this button to check for or download new versions.">
+              <span class="material-icons-round" id="main-menu-update-icon">system_update_alt</span>
+              <span id="main-menu-update-text">Check for Updates</span>
+            </button>
+          </div>
           <div class="settings-action-row">
             <div>
               <div class="settings-toggle-title">GitHub Repository</div>
