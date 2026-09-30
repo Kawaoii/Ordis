@@ -679,7 +679,15 @@ const RIVEN_OVERLAY_WATCH_INTERVAL_MS = 850;
 // waiting to notice. Only the new bytes of the log are read each time, so polling
 // this often costs a file read and nothing else.
 const RIVEN_OVERLAY_LOG_POLL_INTERVAL_MS = 300;
-const RIVEN_OVERLAY_LOG_TAIL_BYTES = 64 * 1024;
+/* How much of the log to read on the first poll after the app starts.
+ *
+ * It has to be big enough to contain a reroll that happened before the app was
+ * launched, which is the whole point: a player who rolled a riven, quit Warframe, opened
+ * Ordis and turned riven grading on expects that roll to be graded. Measured on a real
+ * log, the reroll prompt sat about 300 KB back from the end, so 64 KB missed it every
+ * time. 512 KB covers it with room to spare and still bounds the read to half a
+ * megabyte rather than the whole file. */
+const RIVEN_OVERLAY_LOG_TAIL_BYTES = 512 * 1024;
 const RIVEN_OVERLAY_SCAN_DELAY_MS = 500;
 // The cards are only on screen while the choice prompt is up, and a real reroll
 // showed the player answering it 1.5s after it appeared. The first attempt waits a
@@ -2973,10 +2981,20 @@ async function pollRivenOverlayLog() {
 
     const currentPath = path.normalize(logInfo.path);
     if (currentPath !== rivenOverlayLogPath) {
+      /* First sight of this log: start a little way back rather than at the very end.
+       *
+       * It used to seek straight to the end of the file, which meant the watcher could
+       * only ever see lines written after the app started. The reroll prompt the overlay
+       * triggers on was already sitting in the log - twice - and was skipped, so
+       * enabling riven grading appeared to do nothing at all and lastScanAt stayed at 0
+       * until the player happened to roll a new one.
+       *
+       * The tail is bounded so a 300 MB log does not get read on startup. It is read from
+       * the end because the trigger is the last thing that happened, and a match this
+       * old is harmless: the scan that follows reads the screen, not the log. */
       rivenOverlayLogPath = currentPath;
-      rivenOverlayLogOffset = logInfo.size;
+      rivenOverlayLogOffset = Math.max(0, logInfo.size - RIVEN_OVERLAY_LOG_TAIL_BYTES);
       rivenOverlayLogMissingNotified = false;
-      return;
     }
 
     if (logInfo.size < rivenOverlayLogOffset) {
