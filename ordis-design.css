@@ -4240,9 +4240,96 @@ body.has-split-rail .settings-content { padding-bottom: 0 !important; }
 
 .item-card:hover { box-shadow: none; }
 
-/* The name strip stays, because an unlabelled image is not a codex entry. It is the
-   only chrome left on the tile. */
-.item-card-name { border-radius: 0; }
+/* Codex tiles: keep the name strip inside the tile.
+   ---------------------------------------------------------------------------
+   The tiles were overlapping. Three separate causes, each of which had to be
+   dealt with before anything could be seen, and the order matters because each
+   one hid the next.
+
+   1. The label was a flex child competing with the image for a fixed square.
+      `.item-card-image` carries `flex: 0 0 auto`, so it kept its full height,
+      the 24px label had nowhere to go, and it rendered half outside the tile and
+      on top of the row below. The image is pinned to the tile instead and inset
+      from the bottom by the height of the label, so the two can never contend.
+
+   2. The label is inside `.item-card-body`, not a direct child of `.item-card`.
+      A `>` combinator here matched nothing and the first attempt at this fix did
+      nothing at all, silently. The body is pinned to the bottom of the tile, and
+      taken out of flow so it cannot add height to the tile either.
+
+   3. The row tracks were the wrong height, and this is the part that was not
+      obvious. `.item-card` is a square via `aspect-ratio: 1 / 1`, and
+      aspect-ratio sizes the *box*, not the grid *track*. Once the image and the
+      label are both out of flow the track has no content left to measure, so it
+      collapsed to the `min-height: 176px` floor while the tile itself rendered at
+      206px. Every row then drew 18px over the one above it, which is exactly the
+      height of the label strip, and the labels sat on the row below.
+      `grid-auto-rows: auto` cannot fix this: an auto row sized by a square child
+      is circular and resolves to the content, which is now nothing. The track
+      height has to be stated. It is stated per breakpoint to match the column
+      floor that styles.css sets at each width. */
+.items-grid {
+  grid-auto-rows: 206px;
+}
+
+@media (max-width: 950px) {
+  .items-grid { grid-auto-rows: 176px; }
+}
+
+@media (max-width: 720px) {
+  .items-grid { grid-auto-rows: 176px; }
+}
+
+/* The floor styles.css puts on the tile, kept so a track can never be smaller than
+   the tile it holds. The "show more" placeholder is excluded: it carries its own
+   236px floor and lays its own content out with flex, so it must keep doing that,
+   and it is the only thing on the last row by design. */
+.item-card:not(.items-show-more-card) {
+  min-height: 176px;
+}
+
+/* The image is absolutely positioned rather than a flex child, so the label is the only
+   thing the tile lays out and cannot be squeezed or pushed out of the box. The tile is
+   position: relative already, so this needs no new containing block, and the padding on
+   the image block is what reserves the strip for the name. */
+/* The label lives inside .item-card-body, not directly in .item-card, so the child
+   combinator above matched nothing and the fix silently did nothing. Pin the strip to
+   the tile instead, and take the body out of the flow so it cannot add height.
+
+   Absolutely positioning the body is also what stops the label overlapping the tile
+   above it. As a normal flex child the body's height came out of the tile's own box,
+   so with the image pinned the label rendered above the tile's top edge and landed on
+   the previous row. */
+.item-card:not(.items-show-more-card) .item-card-body {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 0;
+}
+
+.item-card .item-card-name {
+  position: static;
+  margin: 0;
+  padding: 2px 8px 4px;
+  border-radius: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.72) 42%);
+}
+
+/* Scoped to the real tiles. The "More Items Ready" placeholder carries the .item-card
+   class too, and it is deliberately a different thing: it lays its own content out with
+   flex and carries its own 236px min-height, which is why the first row held five tiles
+   and the sixth, the placeholder, sat on a row of its own. Taking it out of the flow
+   here would have left an empty cell where the button is. */
+.item-card:not(.items-show-more-card) > .item-card-image {
+  position: absolute;
+  inset: 0 0 22px 0;
+  width: auto;
+  height: auto;
+}
+
+.item-card:not(.items-show-more-card) .item-card-name {
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.72) 42%);
+}
+
 
 /* Titlebar mark. The wordmark that used to sit beside the emblem is gone: the emblem
    was the previous project's, and "ORDIS" in letterspaced caps repeated the window
