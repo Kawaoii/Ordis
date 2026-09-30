@@ -38,19 +38,27 @@
      ---------------------------------------------------------
      `id` matches the keys getPanelRefs() returns, so focusing a tab can hand off
      to the existing showPanel() instead of reimplementing panel switching. */
+  /* Icons are chosen to name the category, not to decorate the row.
+   *
+   * They were largely generic or wrong: Relics was a plain "category" box, Rivens was a
+   * funnel, Resources was a globe. A rail is a set of icons the player reads rather than
+   * reads, so each one has to look like the thing it opens. Where the game's own
+   * vocabulary is used - a riven is a mod, a relic is a fissure - the icon follows it. */
   var PANELS = [
-    { id: 'checklist', label: 'Equipment', icon: 'inventory_2', el: '#content', nav: null, minW: 520, minH: 320 },
+    { id: 'checklist', label: 'Equipment', icon: 'sports_martial_arts', el: '#content', nav: null, minW: 520, minH: 320 },
     { id: 'market', label: 'Market', icon: 'storefront', el: '#market-panel', nav: '#nav-market', minW: 480, minH: 300 },
-    { id: 'analytics', label: 'Analytics', icon: 'query_stats', el: '#trade-analytics-panel', nav: '#nav-trade-analytics', minW: 460, minH: 300 },
+    { id: 'analytics', label: 'Analytics', icon: 'insights', el: '#trade-analytics-panel', nav: '#nav-trade-analytics', minW: 460, minH: 300 },
     { id: 'prime', label: 'Prime Resurgence', icon: 'workspace_premium', el: '#prime-panel', nav: '#nav-prime-resurgence', minW: 440, minH: 280 },
-    { id: 'relics', label: 'Relics', icon: 'category', el: '#relics-panel', nav: '#nav-relics', minW: 440, minH: 300 },
+    // A relic is a Void Fissure, so the fissure symbol rather than a generic box.
+    { id: 'relics', label: 'Relics', icon: 'filter_vintage', el: '#relics-panel', nav: '#nav-relics', minW: 440, minH: 300 },
     { id: 'arcanes', label: 'Arcanes', icon: 'auto_awesome', el: '#arcanes-panel', nav: '#nav-arcanes', minW: 440, minH: 300 },
-    { id: 'rivens', label: 'Rivens', icon: 'filter_alt', el: '#riven-panel', nav: null, minW: 460, minH: 340 },
-    { id: 'cycles', label: 'Cycles', icon: 'calendar_month', el: '#cycles-panel', nav: '#nav-cycles', minW: 420, minH: 300 },
+    // A riven is a mod. The filter funnel said "narrowing", not "riven".
+    { id: 'rivens', label: 'Rivens', icon: 'extension', el: '#riven-panel', nav: null, minW: 460, minH: 340 },
+    { id: 'cycles', label: 'Cycles', icon: 'cyclone', el: '#cycles-panel', nav: '#nav-cycles', minW: 420, minH: 300 },
     { id: 'compare', label: 'Compare', icon: 'compare_arrows', el: '#compare-panel', nav: '#nav-compare', minW: 480, minH: 320 },
-
-    { id: 'recommendations', label: 'Recommendations', icon: 'tips_and_updates', el: '#recommendations-panel', nav: '#nav-mastery-recommendations', minW: 460, minH: 320 },
-    { id: 'resources', label: 'Resources', icon: 'travel_explore', el: '#resource-search-panel', nav: '#nav-resource-search', minW: 420, minH: 300 },
+    { id: 'recommendations', label: 'Recommendations', icon: 'lightbulb', el: '#recommendations-panel', nav: '#nav-mastery-recommendations', minW: 460, minH: 320 },
+    // Resources are drops you farm for, so the pickaxe rather than a globe.
+    { id: 'resources', label: 'Resources', icon: 'hardware', el: '#resource-search-panel', nav: '#nav-resource-search', minW: 420, minH: 300 },
     { id: 'settings', label: 'Settings', icon: 'settings', el: '#settings-page', nav: null, minW: 480, minH: 320 }
   ];
 
