@@ -633,6 +633,45 @@ let rivenOverlayHideTimer = null;
 let rivenOverlayWatchTimer = null;
 let rivenOverlayWatchUntil = 0;
 let rivenOverlayWatchMisses = 0;
+
+/* An append-only trace of what the overlay actually did.
+ *
+ * The overlay runs in the main process and reports to a renderer the player is not looking
+ * at, in front of a game. When it misbehaves there is nothing to read: a screenshot shows
+ * whether the window was there, never whether the log line was seen, whether memory was
+ * asked, or what it said. Every question about a bad reroll reduces to the same three -
+ * did the trigger fire, did the read answer, and if not, why - and none of them are
+ * observable from outside.
+ *
+ * Written synchronously on purpose. This is a few lines per reroll on a path that only
+ * runs when the player has just rolled something, and a fire-and-forget write would
+ * reorder itself exactly when the app is busy, which is when the interesting entries are.
+ */
+const RIVEN_OVERLAY_TRACE_FILE = 'riven-overlay-trace.log';
+const RIVEN_OVERLAY_TRACE_MAX_BYTES = 512 * 1024;
+
+function rivenOverlayTrace(event, detail) {
+  if (!rivenOverlayEnabled) return;
+  try {
+    const file = path.join(app.getPath('userData'), RIVEN_OVERLAY_TRACE_FILE);
+    let line = new Date().toISOString().slice(11, 23) + ' ' + event;
+    if (detail !== undefined && detail !== null) {
+      let text;
+      try { text = typeof detail === 'string' ? detail : JSON.stringify(detail); }
+      catch (err) { text = '[unserialisable]'; }
+      line += ' ' + text.slice(0, 400);
+    }
+    line += '\n';
+    // Keep it bounded without a read: an appended line over the cap is itself the signal
+    // to start again, and the newest entries are the only ones anyone reads.
+    // fsSync, not fs: fs here is fs/promises, which has no statSync or appendFileSync.
+    try {
+      const st = fsSync.statSync(file);
+      if (st.size > RIVEN_OVERLAY_TRACE_MAX_BYTES) fsSync.writeFileSync(file, '');
+    } catch (err) { /* no file yet */ }
+    fsSync.appendFileSync(file, line);
+  } catch (err) { /* tracing must never break the feature it is tracing */ }
+}
 let rivenOverlayWatchBusy = false;
 let rivenOverlaySelectedSide = '';
 let rivenOverlayWatchSignature = '';
@@ -1270,7 +1309,9 @@ async function runRivenWatchCycle() {
        * resolution change or a fullscreen transition, and treating it as the end of the
        * watch would drop the overlay over a flicker. Counted instead of acted on, so only
        * a run of them means the screen is genuinely gone. */
-      if (++rivenOverlayWatchMisses >= RIVEN_OVERLAY_WATCH_MISS_LIMIT) {
+      rivenOverlayWatchMisses++;
+      rivenOverlayTrace('watch-miss', rivenOverlayWatchMisses);
+      if (rivenOverlayWatchMisses >= RIVEN_OVERLAY_WATCH_MISS_LIMIT) {
         stopRivenOverlayWatch();
       }
       return;
@@ -1288,7 +1329,9 @@ async function runRivenWatchCycle() {
        * Before this, the overlay hid on a fixed timer - nine seconds after the last update -
        * so it vanished while the player was still standing on the choice screen deciding,
        * which is the opposite of when it is wanted. */
-      if (++rivenOverlayWatchMisses >= RIVEN_OVERLAY_WATCH_MISS_LIMIT) {
+      rivenOverlayWatchMisses++;
+      rivenOverlayTrace('watch-miss', rivenOverlayWatchMisses);
+      if (rivenOverlayWatchMisses >= RIVEN_OVERLAY_WATCH_MISS_LIMIT) {
         stopRivenOverlayWatch();
       }
       return;
@@ -1342,6 +1385,7 @@ async function runRivenWatchCycle() {
 
 function startRivenOverlayWatch() {
   stopRivenOverlayWatch();
+  rivenOverlayTrace('watch-start');
   rivenOverlayWatchUntil = Date.now() + RIVEN_OVERLAY_WATCH_WINDOW_MS;
   rivenOverlayWatchSignature = '';
   rivenOverlaySelectedSide = '';
@@ -1368,6 +1412,7 @@ function stopRivenOverlayWatch() {
   rivenOverlayWatchSignature = '';
   rivenOverlaySelectedSide = '';
   const wasWatching = rivenOverlayWatchMisses > 0;
+  rivenOverlayTrace('watch-stop', { misses: rivenOverlayWatchMisses, screenGone: wasWatching });
   rivenOverlayWatchMisses = 0;
 
   /* The cards have gone, so the window has to as well - but not instantly. The last thing
@@ -3084,6 +3129,7 @@ async function runRivenScanBurst() {
 
     rivenOverlayScanAttempts += 1;
     const result = await scanRivenOverlayOnce();
+    rivenOverlayTrace('attempt', result ? (result.ok ? { ok: true, source: result.source } : { ok: false, diag: result.diag }) : 'null');
     if (!result) continue;
     if (result.diag) lastDiag = result.diag;
 
@@ -3139,6 +3185,7 @@ async function runRivenScanBurst() {
 
 function triggerRivenScan(reason) {
   if (!rivenOverlayEnabled) return;
+  rivenOverlayTrace('trigger', reason);
   rivenOverlayBurstUntil = Date.now() + RIVEN_OVERLAY_SCAN_BURST_WINDOW_MS;
   rivenOverlayLastHash = '';
   rivenOverlayLastHashAt = 0;
