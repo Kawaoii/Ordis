@@ -633,6 +633,79 @@ let rivenOverlayHideTimer = null;
 let rivenOverlayWatchTimer = null;
 let rivenOverlayWatchUntil = 0;
 let rivenOverlayWatchMisses = 0;
+let rivenOverlayLogPrimed = false;
+
+/* ALT+R: read the riven on screen again, now.
+ *
+ * A manual retry for what the automatic path cannot cover - the roll changed while the
+ * watcher was between polls, or the screen was already up before the trigger line was
+ * written. It is a shortcut rather than a button because the player's hands are on the
+ * game, and a control inside the app is no use while the app is behind it. */
+const RIVEN_OVERLAY_RESCAN_ACCELERATOR = 'Alt+R';
+let rivenOverlayRescanShortcut = null;
+
+function registerRivenOverlayRescanShortcut() {
+  if (rivenOverlayRescanShortcut || !rivenOverlayEnabled) return;
+  let globalShortcut = null;
+  try { globalShortcut = require('electron').globalShortcut; } catch (err) { return; }
+  if (!globalShortcut) return;
+  try {
+    const ok = globalShortcut.register(RIVEN_OVERLAY_RESCAN_ACCELERATOR, () => {
+      rivenOverlayTrace('manual-rescan');
+      /* The fingerprints are what make a roll count as new, so a manual retry has to
+       * forget them. Otherwise the roll being asked about is already "seen" and is
+       * skipped as a duplicate, which would make the shortcut do nothing at exactly the
+       * moment it is needed. */
+      rivenOverlaySeenFingerprints.clear();
+      rivenOverlayBurstUntil = Date.now() + RIVEN_OVERLAY_SCAN_BURST_WINDOW_MS;
+      runRivenScanBurst().catch(() => {});
+    });
+    rivenOverlayRescanShortcut = ok ? RIVEN_OVERLAY_RESCAN_ACCELERATOR : null;
+    if (!ok) rivenOverlayTrace('rescan-unavailable', RIVEN_OVERLAY_RESCAN_ACCELERATOR);
+  } catch (err) {
+    rivenOverlayRescanShortcut = null;
+  }
+}
+
+function unregisterRivenOverlayRescanShortcut() {
+  if (!rivenOverlayRescanShortcut) return;
+  try { require('electron').globalShortcut.unregister(rivenOverlayRescanShortcut); } catch (err) { /* already gone */ }
+  rivenOverlayRescanShortcut = null;
+}
+
+/* Warm the memory reader's region cache in the background.
+ *
+ * The scanner caches which parts of the game process hold riven strings, keyed to the
+ * running process, and a warm cache reads in about a fifth of a second. A cold one walks
+ * the whole process: fourteen to seventeen seconds, measured, on the first read after
+ * every game start.
+ *
+ * That first read is the one the player feels. The overlay triggers the moment a roll is
+ * confirmed, so it was always landing on the cold walk and the result arrived long after
+ * the screen it belonged to. Warming it while the player is still in the menus moves the
+ * cost to a moment when nobody is waiting on it, which is the entire difference between
+ * an answer in a fifth of a second and an answer after the reroll screen has gone.
+ *
+ * Best effort throughout: a failure here is a slow first read, never a broken feature. */
+let rivenMemoryWarmInFlight = null;
+
+function warmRivenMemoryCache() {
+  if (process.platform !== 'win32') return Promise.resolve(null);
+  if (rivenMemoryWarmInFlight) return rivenMemoryWarmInFlight;
+  rivenMemoryWarmInFlight = scanRivensFromMemory({
+    force: true,
+    rebuild: false,
+    maxSeconds: 60,
+    stopAfter: 40
+  }).catch(() => null).then((result) => {
+    rivenMemoryWarmInFlight = null;
+    if (result && result.ok) {
+      rivenOverlayTrace('cache-warm', { entries: (result.entries || []).length, ms: result.elapsedMs });
+    }
+    return result;
+  });
+  return rivenMemoryWarmInFlight;
+}
 
 /* An append-only trace of what the overlay actually did.
  *
@@ -1384,6 +1457,9 @@ async function runRivenWatchCycle() {
 }
 
 function startRivenOverlayWatch() {
+  /* Cheap insurance: if the player cycles immediately, the cache is at least being
+     built rather than not built at all. */
+  warmRivenMemoryCache();
   stopRivenOverlayWatch();
   rivenOverlayTrace('watch-start');
   rivenOverlayWatchUntil = Date.now() + RIVEN_OVERLAY_WATCH_WINDOW_MS;
@@ -3242,6 +3318,14 @@ async function pollRivenOverlayLog() {
        * the end because the trigger is the last thing that happened, and a match this
        * old is harmless: the scan that follows reads the screen, not the log. */
       rivenOverlayLogPath = currentPath;
+      /* The tail just read is history, not news.
+       *
+       * Acting on it fired the overlay the moment the app launched, off a roll the player
+       * had done in some earlier session - which is how the overlay came up over the game
+       * before the game had even started. The first chunk after a log change is swallowed
+       * and only lines written from now on count, so a genuine roll in progress is still
+       * caught and a stale one is not. */
+      rivenOverlayLogPrimed = false;
       rivenOverlayLogOffset = Math.max(0, logInfo.size - RIVEN_OVERLAY_LOG_TAIL_BYTES);
       rivenOverlayLogMissingNotified = false;
     }
@@ -3255,6 +3339,19 @@ async function pollRivenOverlayLog() {
     const start = Math.max(rivenOverlayLogOffset, logInfo.size - RIVEN_OVERLAY_LOG_TAIL_BYTES);
     const chunk = await readLogChunk(currentPath, start, logInfo.size, RIVEN_OVERLAY_LOG_TAIL_BYTES);
     rivenOverlayLogOffset = logInfo.size;
+
+    /* The first chunk after a log change is swallowed.
+     *
+     * It is up to half a megabyte of what the game has already done, and it is read so
+     * that a roll from just before the app started is not missed. Acting on it is what put
+     * the overlay over the game before the game was running: a trigger line from a
+     * previous session, a scan against a game that was not there yet, and a result for a
+     * roll nobody was looking at. Swallowing the first chunk and reading from wherever
+     * the log is now costs at most one missed roll, which is the cheaper mistake. */
+    if (!rivenOverlayLogPrimed) {
+      rivenOverlayLogPrimed = true;
+      return;
+    }
 
     /* Which dialog means the cards are on screen.
      *
@@ -4498,6 +4595,9 @@ ipcMain.handle('set-riven-overlay-enabled', async (_event, enabled) => {
       enabled: true,
       message: 'Watching EE.log for riven rerolls...'
     });
+    // Bound last, and only once the overlay is actually on, so the shortcut cannot
+    // outlive the feature it retries.
+    registerRivenOverlayRescanShortcut();
     return { ok: true, enabled: true };
   } catch (err) {
     await stopRivenOverlayLoop();
