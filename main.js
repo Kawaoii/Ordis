@@ -3183,7 +3183,37 @@ async function gradeRivenScan(success, options) {
   return result;
 }
 
+/* One burst at a time.
+ *
+ * A trigger and a manual rescan can land seconds apart while the first burst is still
+ * working, and the trace caught what that costs: one burst read the roll and answered at
+ * 21:24:16.711, and six milliseconds later the second burst - which had already seen the
+ * roll, so memory correctly reported it as nothing new - fell through to OCR, failed, and
+ * put its failure on screen over the answer. The good result was replaced by the absence
+ * of one, six milliseconds after it arrived.
+ *
+ * Serialised rather than merged, because a burst that restarts mid-flight would throw away
+ * the attempts already spent. The second waits and then runs; if the first found the roll
+ * there is nothing left to find. */
+let rivenOverlayBurstInFlight = false;
+
 async function runRivenScanBurst() {
+  if (rivenOverlayBurstInFlight) {
+    rivenOverlayTrace('burst-already-running');
+    return;
+  }
+  rivenOverlayBurstInFlight = true;
+  try {
+    await runRivenScanBurstInner();
+  } finally {
+    /* Released in a finally, so a throw inside the burst cannot wedge the overlay into
+     * permanently refusing to scan - which is the failure that would look exactly like
+     * "the feature stopped working" with nothing in the log to say why. */
+    rivenOverlayBurstInFlight = false;
+  }
+}
+
+async function runRivenScanBurstInner() {
   rivenOverlayScanAttempts = 0;
   let lastDiag = null;
   let success = null;
