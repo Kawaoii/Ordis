@@ -632,6 +632,7 @@ let rivenOverlayHideTimer = null;
 // nothing and a flip is picked up on the next cycle.
 let rivenOverlayWatchTimer = null;
 let rivenOverlayWatchUntil = 0;
+let rivenOverlayWatchMisses = 0;
 let rivenOverlayWatchBusy = false;
 let rivenOverlaySelectedSide = '';
 let rivenOverlayWatchSignature = '';
@@ -674,6 +675,18 @@ const RIVEN_OVERLAY_HIDE_DELAY_MS = 9000;
  * read and no extra OCR. */
 const RIVEN_OVERLAY_WATCH_WINDOW_MS = 150000;
 const RIVEN_OVERLAY_WATCH_INTERVAL_MS = 850;
+
+/* Consecutive watch cycles that find no cards before the screen is taken to be gone.
+   Three cycles is about two and a half seconds. One is not enough: a card animating out,
+   or a capture that lands during a resolution change, both look like an absent screen for
+   a single cycle, and ending the watch on either would drop the overlay over a flicker.
+   The number is a compromise between leaving the overlay up over a screen the player has
+   already left, and yanking it away mid-glance. */
+const RIVEN_OVERLAY_WATCH_MISS_LIMIT = 3;
+
+/* How long the last result stays up once the cards have gone. Long enough to read a
+   comparison, short enough that it is not still there when the player looks back. */
+const RIVEN_OVERLAY_WATCH_END_GRACE_MS = 2600;
 // 300ms, not 750ms: the cards are on screen for as long as the player takes to
 // answer the choice prompt, and a real one took 1.5s. Half of that was being spent
 // waiting to notice. Only the new bytes of the log are read each time, so polling
@@ -1091,15 +1104,43 @@ async function showRivenOverlay(result, display) {
     );
     overlay.showInactive();
 
-    if (rivenOverlayHideTimer) clearTimeout(rivenOverlayHideTimer);
-    rivenOverlayHideTimer = setTimeout(() => {
+    /* Persistence: the window stays up for as long as the cards are on screen.
+     *
+     * The hide timer is the reason the overlay behaved like a notification. It was armed
+     * on every update and fired nine seconds later whether or not the player had left the
+     * reroll screen, so the overlay disappeared while they were still standing on the
+     * choice holding both cards up - which is the one moment it exists for. While the
+     * watch is following a selection the cards are on screen by definition, so the timer
+     * is cleared and nothing is armed. The watch ends on its own when the cards stop being
+     * found, and stopRivenOverlayWatch is what brings the fade back. */
+    if (rivenOverlayHideTimer) {
+      clearTimeout(rivenOverlayHideTimer);
       rivenOverlayHideTimer = null;
-      if (rivenOverlayWindow && !rivenOverlayWindow.isDestroyed()) rivenOverlayWindow.hide();
-    }, RIVEN_OVERLAY_HIDE_DELAY_MS);
+    }
+    if (!isRivenOverlayWatching()) {
+      armRivenOverlayHide(RIVEN_OVERLAY_HIDE_DELAY_MS);
+    }
     return { ok: true };
   } catch (err) {
     return { ok: false, reason: err && err.message ? err.message : 'overlay failed' };
   }
+}
+
+function isRivenOverlayWatching() {
+  return !!(rivenOverlayWatchTimer && Date.now() < rivenOverlayWatchUntil);
+}
+
+/* One place that decides when the window goes, so the show path and the watch path cannot
+   disagree about it. */
+function armRivenOverlayHide(delayMs) {
+  if (rivenOverlayHideTimer) {
+    clearTimeout(rivenOverlayHideTimer);
+    rivenOverlayHideTimer = null;
+  }
+  rivenOverlayHideTimer = setTimeout(() => {
+    rivenOverlayHideTimer = null;
+    if (rivenOverlayWindow && !rivenOverlayWindow.isDestroyed()) rivenOverlayWindow.hide();
+  }, delayMs == null ? RIVEN_OVERLAY_HIDE_DELAY_MS : delayMs);
 }
 
 async function hideRivenOverlay() {
@@ -1224,14 +1265,35 @@ async function runRivenWatchCycle() {
         break;
       }
     }
-    if (!capture) return;
+    if (!capture) {
+      /* A capture that fails is not the same as a screen that closed. The first can be a
+       * resolution change or a fullscreen transition, and treating it as the end of the
+       * watch would drop the overlay over a flicker. Counted instead of acted on, so only
+       * a run of them means the screen is genuinely gone. */
+      if (++rivenOverlayWatchMisses >= RIVEN_OVERLAY_WATCH_MISS_LIMIT) {
+        stopRivenOverlayWatch();
+      }
+      return;
+    }
 
     const regions = {
       previous: createRivenOcrRegion(capture.image, RIVEN_OVERLAY_CARDS.previous),
       current: createRivenOcrRegion(capture.image, RIVEN_OVERLAY_CARDS.current)
     };
     const side = pickSelectedRivenCard(regions, rivenOverlaySelectedSide);
-    if (!side) return;
+    if (!side) {
+      /* The cards are not on screen any more, so the player has left the reroll screen.
+       * This is what makes the overlay persistent rather than a notification: the window
+       * stays up for as long as the cards are actually there, and goes when they are not.
+       * Before this, the overlay hid on a fixed timer - nine seconds after the last update -
+       * so it vanished while the player was still standing on the choice screen deciding,
+       * which is the opposite of when it is wanted. */
+      if (++rivenOverlayWatchMisses >= RIVEN_OVERLAY_WATCH_MISS_LIMIT) {
+        stopRivenOverlayWatch();
+      }
+      return;
+    }
+    rivenOverlayWatchMisses = 0;
     const region = regions[side];
     /* Hash the static text band, not the card. The card's picture rotates while the
      * card sits there, so hashing the whole card produced a different signature on
@@ -1305,6 +1367,14 @@ function stopRivenOverlayWatch() {
   rivenOverlayWatchBusy = false;
   rivenOverlayWatchSignature = '';
   rivenOverlaySelectedSide = '';
+  const wasWatching = rivenOverlayWatchMisses > 0;
+  rivenOverlayWatchMisses = 0;
+
+  /* The cards have gone, so the window has to as well - but not instantly. The last thing
+     shown is the comparison the player was reading, and cutting it the frame the screen
+     closes throws away the answer they were in the middle of. A short grace holds the
+     result up long enough to read. */
+  if (wasWatching) armRivenOverlayHide(RIVEN_OVERLAY_WATCH_END_GRACE_MS);
 }
 
 function getRelicOverlayTextSignature(text) {
