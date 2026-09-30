@@ -808,6 +808,19 @@ body.is-resizing .modal-overlay {
   flex: 0 0 auto;
 }
 
+/* Item art in the rail: a Void Trace, an Argon Crystal, the riven rune.
+ *
+ * Sized to the glyph it sits beside rather than to its own pixels, and constrained to a
+ * box so a wide icon cannot stretch the tab. object-fit keeps it whole: game art is
+ * square, and cropping it to fill would cut the riven's points off at the sides. */
+.dock-tab-art {
+  width: 19px;
+  height: 19px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 5px rgba(150, 120, 255, 0.45));
+}
+
+
 /* Lifted state: the "picked up" cue after the long press. */
 .dock-tab.is-lifted {
   position: fixed;
@@ -4110,6 +4123,17 @@ input[type="number"].wfm-input {
   border-radius: 14px;
   border: 1px solid var(--border-color);
   background: var(--bg-primary);
+  /* A pane is its own layout context.
+   *
+   * Everything inside a panel was sized for a full window: 24px gutters, 200px cards, a
+   * full-size title. Dropped into half a window, or a third, that spacing does not scale
+   * down, it just gets in the way - the gutters eat a quarter of a narrow pane and the
+   * cards fall to one column long before the space is genuinely used. A media query cannot
+   * fix this, because the app's window size says nothing about how much room the pane has:
+   * three panes side by side in a wide window are each narrower than two panes in a small
+   * one. The pane measures itself instead, and the content inside it responds to that. */
+  container-type: inline-size;
+  container-name: pane;
 }
 
 .split-panes.is-split .split-pane[data-slot='primary'] {
@@ -4583,3 +4607,77 @@ body.has-split-rail .settings-content { padding-bottom: 0 !important; }
 }
 
 .titlebar-logo:hover img { opacity: 1; }
+
+/* ============================================================================
+   PANE-AWARE SCALING
+   ----------------------------------------------------------------------------
+   A split pane is not a smaller window, it is a differently shaped one, and the
+   content inside it should be laid out for the room it actually has. These rules
+   are written against the pane's own width rather than the window's, so a pane is
+   dense in a three-way split and roomy when it has the app to itself, without
+   either state being a special case.
+   ========================================================================== */
+
+/* Two panes side by side: each is about half the window. */
+@container pane (max-width: 720px) {
+  .items-grid {
+    padding: 8px 12px 14px;
+    gap: 9px;
+    /* 200px cards in a 400px pane leave one column with a wide empty strip beside
+       it. Dropping the floor is what buys a second column. */
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  }
+
+  .category-header {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .riven-row__thumb {
+    width: 40px;
+    height: 40px;
+  }
+}
+
+/* Three panes, or two in a small window: a pane is now narrow enough that anything
+   sized for a full window is mostly margin. */
+@container pane (max-width: 480px) {
+  .items-grid {
+    padding: 6px 8px 10px;
+    gap: 7px;
+    grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  }
+
+  /* Text labels are what go first. The icons still say what the categories are, which
+     is the whole argument for having picked icons for them. */
+  .category-rail .nav-text {
+    display: none;
+  }
+
+  .category-rail {
+    padding: 4px 2px;
+  }
+
+  .category-header {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .riven-row__thumb {
+    width: 34px;
+    height: 34px;
+  }
+}
+
+/* A pane that is wide but short is the other half of the same problem: the columns
+   are fine, the vertical budget is not. */
+@container pane (max-height: 460px) {
+  .items-grid {
+    padding-bottom: 8px;
+  }
+
+  .riven-detail__stat {
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
+}

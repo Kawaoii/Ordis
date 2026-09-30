@@ -40,27 +40,41 @@
      to the existing showPanel() instead of reimplementing panel switching. */
   /* Icons are chosen to name the category, not to decorate the row.
    *
-   * They were largely generic or wrong: Relics was a plain "category" box, Rivens was a
-   * funnel, Resources was a globe. A rail is a set of icons the player reads rather than
-   * reads, so each one has to look like the thing it opens. Where the game's own
-   * vocabulary is used - a riven is a mod, a relic is a fissure - the icon follows it. */
+   * A rail is a set of icons the player reads rather than reads, so each one has to look
+   * like the thing it opens. Material ligatures are the wrong tool for the rest: there is
+   * no glyph for an Argon Crystal or a Void Trace, and reaching for a near-miss instead
+   * ("a riven is a mod", said a comment that used to sit right here) gives two tabs the
+   * same picture and hides which one the player is in. The items the game itself gives a
+   * face to - a Void Trace, an Argon Crystal, a riven - use its art, the same way the
+   * Archgun and Amp categories already do. */
   var PANELS = [
     { id: 'checklist', label: 'Equipment', icon: 'sports_martial_arts', el: '#content', nav: null, minW: 520, minH: 320 },
+    /* Mods is a view of the item grid, not a second copy of it.
+     *
+     * The dock floats a panel by moving its element into a window, so two tabs pointing
+     * at #content would both claim the same node and one of them would take it away from
+     * the other. A view instead names the category and hands the grid to it, which is
+     * what the old row in the equipment rail did anyway - the same grid, one category
+     * over. `view` is also why it is not torn off: there is only one grid, so there is
+     * nothing separate to put in a window. */
+    { id: 'mods', label: 'Mods', icon: 'extension', el: '#content', nav: null, minW: 520, minH: 320, view: { category: 'Mods' } },
     { id: 'market', label: 'Market', icon: 'storefront', el: '#market-panel', nav: '#nav-market', minW: 480, minH: 300 },
     { id: 'analytics', label: 'Analytics', icon: 'insights', el: '#trade-analytics-panel', nav: '#nav-trade-analytics', minW: 460, minH: 300 },
     { id: 'prime', label: 'Prime Resurgence', icon: 'workspace_premium', el: '#prime-panel', nav: '#nav-prime-resurgence', minW: 440, minH: 280 },
-    // A relic is a Void Fissure, so the fissure symbol rather than a generic box.
-    { id: 'relics', label: 'Relics', icon: 'filter_vintage', el: '#relics-panel', nav: '#nav-relics', minW: 440, minH: 300 },
+    // The relic the player is actually holding, not a decorative box.
+    { id: 'relics', label: 'Relics', icon: 'assets/void-trace.png', fallbackIcon: 'filter_vintage', el: '#relics-panel', nav: '#nav-relics', minW: 440, minH: 300 },
     { id: 'arcanes', label: 'Arcanes', icon: 'auto_awesome', el: '#arcanes-panel', nav: '#nav-arcanes', minW: 440, minH: 300 },
-    // A riven is a mod. The filter funnel said "narrowing", not "riven".
-    { id: 'rivens', label: 'Rivens', icon: 'extension', el: '#riven-panel', nav: null, minW: 460, minH: 340 },
+    // The riven rune itself. The "extension" mod glyph is what this used to be, which is
+    // why Rivens and Mods looked like the same tab.
+    { id: 'rivens', label: 'Rivens', icon: 'assets/riven-rune.png', fallbackIcon: 'extension', el: '#riven-panel', nav: null, minW: 460, minH: 340 },
     { id: 'cycles', label: 'Cycles', icon: 'cyclone', el: '#cycles-panel', nav: '#nav-cycles', minW: 420, minH: 300 },
     { id: 'compare', label: 'Compare', icon: 'compare_arrows', el: '#compare-panel', nav: '#nav-compare', minW: 480, minH: 320 },
     { id: 'recommendations', label: 'Recommendations', icon: 'lightbulb', el: '#recommendations-panel', nav: '#nav-mastery-recommendations', minW: 460, minH: 320 },
-    // Resources are drops you farm for, so the pickaxe rather than a globe.
-    { id: 'resources', label: 'Resources', icon: 'hardware', el: '#resource-search-panel', nav: '#nav-resource-search', minW: 420, minH: 300 },
+    // Argon Crystal, the resource every relic run is chasing.
+    { id: 'resources', label: 'Resources', icon: 'assets/argon-crystal.png', fallbackIcon: 'hardware', el: '#resource-search-panel', nav: '#nav-resource-search', minW: 420, minH: 300 },
     { id: 'settings', label: 'Settings', icon: 'settings', el: '#settings-page', nav: null, minW: 480, minH: 320 }
   ];
+
 
   /* Snap field. Panels align to these fractions of the workspace, which is what
      makes two windows line up without any manual nudging. */
@@ -421,17 +435,52 @@
     return true;
   }
 
+  /* A tab's tooltip. Split out because two places need it: buildTab on first render, and
+     setTabMeta when a count arrives later. Building the string twice is how the two
+     drifted, with the count quietly vanishing from the hover after a redraw. */
+  function tabTitle(panel) {
+    return panel.label + ' - press and hold to rearrange' +
+      (panel.note ? ' (' + panel.note + ')' : '');
+  }
+
   function buildTab(panel) {
     var tab = document.createElement('button');
     tab.className = 'dock-tab glass';
     tab.type = 'button';
     tab.dataset.panel = panel.id;
     tab.setAttribute('role', 'tab');
-    tab.title = panel.label + ' - press and hold to rearrange';
+    tab.title = tabTitle(panel);
 
-    var icon = document.createElement('span');
-    icon.className = 'material-icons-round dock-tab-icon';
-    icon.textContent = panel.icon;
+
+    var icon;
+    /* An icon is either a font ligature or a picture of the thing.
+     *
+     * The rail used to assume a ligature and put the panel name straight into the text
+     * node, which fails quietly: a missing ligature renders as its own name as text, so
+     * the tab ends up captioned "assets/argon-crystal.png" instead of drawing a crystal.
+     * A path is checked for a file extension instead, which is the only way to tell the
+     * two apart from the single string the panel list carries. */
+    if (/\.(png|webp|svg|jpe?g)$/i.test(panel.icon)) {
+      icon = document.createElement('img');
+      icon.className = 'dock-tab-icon dock-tab-art';
+      icon.src = panel.icon;
+      icon.alt = '';
+      icon.setAttribute('aria-hidden', 'true');
+      /* The art is dropped in as a file, so it can be missing on any given checkout
+       * without the tab going blank. A failed load swaps in the glyph it replaced rather
+       * than leaving a hole in the rail, which is the whole reason the art is optional. */
+      icon.addEventListener('error', function () {
+        var glyph = document.createElement('span');
+        glyph.className = 'material-icons-round dock-tab-icon';
+        glyph.textContent = panel.fallbackIcon || 'category';
+        if (icon.parentNode) icon.parentNode.replaceChild(glyph, icon);
+      });
+    } else {
+      icon = document.createElement('span');
+      icon.className = 'material-icons-round dock-tab-icon';
+      icon.textContent = panel.icon;
+    }
+
 
     var label = document.createElement('span');
     label.className = 'dock-tab-label';
@@ -741,8 +790,13 @@
   function tearOff(x, y) {
     if (drag.floating) return;
     var panel = drag.panel;
+    /* A view has no element of its own to put in a window. Tearing off Mods would move
+     * the item grid that Equipment is also using, so the grid would follow the new
+     * window and leave the old tab blank. */
+    if (panel && panel.view) return;
     var el = document.querySelector(panel.el);
     if (!el) return;
+
 
     drag.floating = true;
     dom.ghost.style.display = 'none';
@@ -1414,6 +1468,23 @@
       syncEmptyState();
       save();
     },
+
+    /* Add to a tab's tooltip, so a fact that used to live in a rail badge is not simply
+     * lost when the row becomes a tab. Passing null clears it.
+     *
+     * renderStrip() rebuilds every tab from the panel list, so anything written straight
+     * onto a tab is lost the next time the strip re-renders. It is kept here and re-applied
+     * in buildTab instead, or the count would appear once and then vanish on the next
+     * drag. */
+    setTabMeta: function (id, note) {
+      var panel = byId[id];
+      if (!panel) return;
+      if (note) panel.note = note; else delete panel.note;
+      if (!dom.tabs || !dom.tabs[id]) return;
+      var tab = dom.tabs[id];
+      tab.title = tabTitle(panel);
+    },
+
     teardown: function () {
       if (!dom.layer) return;
       Object.keys(state.floats).forEach(function (id) { redock(id); });

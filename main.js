@@ -2459,8 +2459,111 @@ async function recognizeRivenRegion(capture, only) {
   return { duplicate: false, imageHash: hash, now, cards };
 }
 
+/**
+ * Read the riven on screen straight out of game memory.
+ *
+ * The overlay used to screenshot the card and OCR it, which was both slow and wrong:
+ * up to four attempts with half-second waits between them, so up to four seconds of
+ * waiting, against an OCR pass measured at fifty percent stat accuracy across two
+ * hundred real frames. Half of every grade it produced was a guess.
+ *
+ * The riven being rerolled is the same plain string in the same process that the Rivens
+ * tab already reads, and that read is exact and takes about a fifth of a second once the
+ * memory regions are known. So the overlay asks for the same thing first, and only
+ * falls back to the screen when memory has nothing new to say.
+ *
+ * The screen path is kept rather than deleted. Memory cannot see a roll the game has not
+ * written yet, and OCR can, so on the first frame after the player confirms there is
+ * still a window where reading the screen is the only option. Memory gets first refusal
+ * because when it answers it is right, and OCR gets the fallback because when memory is
+ * silent it is the only thing left.
+ *
+ * Returns null when memory has nothing that looks like the riven on screen, which is the
+ * caller's signal to try the screen.
+ */
+async function readPendingRivenFromMemory() {
+  if (process.platform !== 'win32') return null;
+  try {
+    const result = await scanRivensFromMemory({ force: true, maxSeconds: 12, stopAfter: 200 });
+    if (!result || !result.ok || !result.entries || !result.entries.length) return null;
+
+    const keyed = result.entries.map((e) => ({
+      key: (e.weaponName || '') + '|' +
+        (e.stats || []).map((s) => (s.isPositive ? '+' : '-') + s.key + ':' + s.value).sort().join(','),
+      entry: e
+    }));
+
+    /* The roll in progress is whichever riven in memory we have not already shown.
+     *
+     * Everything memory holds has been seen before except the one the player just
+     * confirmed, so the first unseen entry is the new roll. That is what makes this work
+     * for a reroll at all: the previous riven is still in memory too, and treating the
+     * newest as the answer would re-announce the roll the player is replacing. */
+    let fresh = null;
+    for (const k of keyed) {
+      if (!rivenOverlaySeenFingerprints.has(k.key)) { fresh = k; break; }
+    }
+    if (!fresh) return null;
+
+    const stats = fresh.entry.stats || [];
+    if (stats.length < 2) return null;
+    // A roll in progress has no mastery rank yet, and neither does nothing worth
+    // announcing, so a read that found one is not the pending roll.
+    if (!fresh.entry.masterRank && fresh.entry.masterRank !== 0) return null;
+
+    rivenOverlaySeenFingerprints.add(fresh.key);
+    // Bounded: a long session would otherwise keep every roll it ever saw. The size of
+    // the most recent collection is far more than the handful needed to spot a new one.
+    while (rivenOverlaySeenFingerprints.size > 400) {
+      rivenOverlaySeenFingerprints.delete(rivenOverlaySeenFingerprints.values().next().value);
+    }
+
+    /* The roll this one replaces, for the side-by-side comparison.
+     *
+     * The previous riven is still in memory, and it is the truer "before" than the last
+     * one announced: it is what was actually on screen. Anything already seen is a
+     * candidate, and the newest of those is the roll being replaced. Without this the
+     * overlay can only ever show one card, and comparing a new roll to the old one is
+     * the entire point of standing there watching. */
+    const seenBefore = keyed.filter((k) => rivenOverlaySeenFingerprints.has(k.key));
+    const previous = seenBefore.length ? seenBefore[seenBefore.length - 1] : null;
+
+    return {
+      source: 'memory',
+      text: fresh.entry.text,
+      stats,
+      weaponName: fresh.entry.weaponName,
+      weaponNameCandidates: fresh.entry.weaponNameCandidates,
+      masterRank: fresh.entry.masterRank,
+      rivenType: fresh.entry.rivenType,
+      previousText: previous ? previous.entry.text : '',
+      diag: { memory: true, displaysTried: 0, ocrRuns: 0 }
+    };
+  } catch (err) {
+    return null;
+  }
+}
+
+/* Fingerprints of rolls the overlay has already announced, so a reroll can be told apart
+   from the roll it replaces. See readPendingRivenFromMemory. */
+const rivenOverlaySeenFingerprints = new Set();
+
 async function scanRivenOverlayOnce() {
   if (!rivenOverlayEnabled || rivenOverlayScanning) return null;
+
+  /* Memory first, and before the scanning flag is taken.
+   *
+   * The flag guards the screen path, which captures the display and must not run twice
+   * at once. The memory read is a child process against the game and is independent of
+   * it, and it is the fast path, so making it queue behind a flag it does not need would
+   * add the very latency this is here to remove. */
+  const fromMemory = await readPendingRivenFromMemory();
+  if (fromMemory) {
+    rivenOverlayScanning = false;
+    rivenOverlayLastScanAt = Date.now();
+    return { ok: true, source: 'memory', ...fromMemory };
+  }
+
   rivenOverlayScanning = true;
   rivenOverlayLastScanAt = Date.now();
 
@@ -2905,7 +3008,21 @@ async function runRivenScanBurst() {
     }
 
     if (rivenOverlayScanAttempts < RIVEN_OVERLAY_MAX_SCAN_ATTEMPTS) {
-      await new Promise((resolve) => setTimeout(resolve, RIVEN_OVERLAY_SCAN_DELAY_MS));
+      /* Retry quickly, and stop early once memory has answered and the screen is what
+       * is failing.
+       *
+       * The wait was a flat 500ms between every attempt, on the assumption that each try
+       * was a slow OCR pass. Memory answers in about a fifth of a second, so half a
+       * second of sleep after it is most of the latency, spent waiting for an answer that
+       * either already arrived or will not arrive faster for waiting. The case actually
+       * worth retrying is the one where the game has not written the roll yet, so a miss on
+       * memory means go and look at the screen, and a miss on the screen means the frame
+       * is still animating and a longer wait is the right answer. */
+      const memoryTried = lastDiag && lastDiag.memory;
+      await new Promise((resolve) => setTimeout(
+        resolve,
+        memoryTried ? RIVEN_OVERLAY_SCREEN_RETRY_DELAY_MS : RIVEN_OVERLAY_MEMORY_RETRY_DELAY_MS
+      ));
     }
   }
 

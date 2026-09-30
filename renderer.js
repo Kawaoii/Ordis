@@ -16426,7 +16426,14 @@ card.addEventListener('auxclick', function(e) {
     setCount('count-archgun', counts['Archgun']);
     setCount('count-archmelee', counts['Archmelee']);
     setCount('count-amps', counts['Amps']);
-    setCount('count-mods', counts['Mods']);
+    /* Mods lost its row in the equipment rail when it became a tab of its own, and with
+     * it the only place the mod count was shown. The tab has no badge, so the number goes
+     * in its tooltip: the dock builds that title once at startup, which is why this
+     * rewrites it rather than passing an id to setCount, whose element is now gone. */
+    if (window.OrdisDock && typeof window.OrdisDock.setTabMeta === 'function') {
+      var modTotal = (counts['Mods'] && counts['Mods'].total != null) ? counts['Mods'].total : counts['Mods'];
+      window.OrdisDock.setTabMeta('mods', modTotal ? (modTotal + ' mods in your inventory') : null);
+    }
   }
 
   function setCount(id, masteredOrCounts, total) {
@@ -17164,6 +17171,17 @@ card.addEventListener('auxclick', function(e) {
     };
   }
 
+  /* Mods is a view of the item grid, not a panel with an element of its own.
+   *
+   * There is one grid, and the dock floats a panel by moving that element into a window,
+   * so a second tab claiming #content would either blank the grid or take it away from
+   * Equipment. Naming the category and showing the same grid gives Mods its own tab
+   * without a second copy of several hundred mod entries to keep in step. */
+  var PANEL_VIEWS = { mods: { category: 'Mods', owner: 'checklist' } };
+
+  function panelView(panel) { return PANEL_VIEWS[panel] || null; }
+  function panelOwner(panel) { var v = panelView(panel); return v ? v.owner : panel; }
+
   function getCurrentPanelName() {
     var refs = getPanelRefs();
     if (refs.settings && !refs.settings.classList.contains('hidden')) return 'settings';
@@ -17178,10 +17196,21 @@ card.addEventListener('auxclick', function(e) {
     if (refs.prime && !refs.prime.classList.contains('hidden')) return 'prime';
     if (refs.analytics && !refs.analytics.classList.contains('hidden')) return 'analytics';
     if (refs.market && !refs.market.classList.contains('hidden')) return 'market';
+    /* The grid is up and the rail is on Mods, so the Mods tab is what the player is
+     * looking at, even though the visible element is Equipment's. Without this the strip
+     * highlighted Equipment while the grid showed nothing but mods. */
+    if (refs.checklist && !refs.checklist.classList.contains('hidden')) {
+      return currentCategory === 'Mods' ? 'mods' : 'checklist';
+    }
     return 'checklist';
   }
 
   function applyPanelVisibility(panel, refs) {
+    /* Views share their owner's element, so the visibility pass has to be addressed to
+     * the element that actually exists. Passing 'mods' through would find no
+     * modsPanel and leave whatever was open on screen. */
+    panel = panelOwner(panel);
+
     var contentEl = refs.checklist;
     var marketPanel = refs.market;
     var analyticsPanel = refs.analytics;
@@ -17580,6 +17609,28 @@ card.addEventListener('auxclick', function(e) {
   }
 
   async function showPanel(panel, smooth) {
+    /* A view has to be applied before anything reads the grid, or the panel opens on
+     * whatever category the rail was left on - which is how clicking Mods used to show
+     * All Items. This runs first, ahead of the dock sync, so the strip highlights the
+     * tab that was actually pressed. */
+    var view = panelView(panel);
+    if (view) {
+      currentCategory = view.category;
+      syncCategoryActive();
+      applyFilters();
+    } else if (panel === 'checklist' && currentCategory === 'Mods') {
+      /* Coming back from the Mods tab has to undo the category the view set.
+       *
+       * Mods is a view over the one grid, so the view writes to the same category the
+       * equipment rail uses. Without this, opening Mods and then Equipment left the grid
+       * filtered to mods, and the Equipment tab showed 181 mods instead of items - the
+       * exact thing separating the two was meant to prevent. Scoped to Mods so that a
+       * category picked in the equipment rail is still there when Equipment is reopened. */
+      currentCategory = 'all';
+      syncCategoryActive();
+      applyFilters();
+    }
+
     var refs = getPanelRefs();
     var currentName = getCurrentPanelName();
     var currentEl = refs[currentName];
