@@ -165,6 +165,29 @@ From *Devshorts #115 & #116*, August 2026:
 - **Reroll overlay needs no data source at all.** The riven is on screen. This is the
   part that is genuinely solved.
 
+## Branding
+
+The user drew a pixel-art wordmark. The letterforms are tight-set, so the single "R"
+was extracted by hand-placed crop rather than by column gaps: the letters touch, which
+defeats segmentation, and an auto-detected background picked white on a tight crop and
+removed the letter instead of the canvas.
+
+- `assets/ordis-mark.png` is that "R", 512x512, transparent, built with integer-only
+  nearest-neighbour scaling. Any fractional scale resamples the blocks and destroys the
+  effect, which is the whole point of the style.
+- The titlebar's previous emblem and its letterspaced `ORDIS` text are gone. The emblem
+  was the upstream project's, and the text repeated the window title next to a mark that
+  already said the same thing.
+- The same mark is the app icon for Windows and Linux, and the README's header image.
+- **The repo avatar on the GitHub website is not a file in the repo.** The user has to
+  upload it in the repository's Settings; nothing in the tree can change it.
+
+The wordmark itself was not adopted. It extracts unreliably: the source has a stray line
+near the bottom that stretches the detected bounds, and the letters cannot be separated
+automatically. If a clean single-letter version is ever drawn, dropping it into
+`assets/ordis-mark.png` is all that is needed to update the icon, the titlebar and the
+README at once.
+
 ## Known bugs
 
 - Split view: the rail renders on the **right** and the left pane comes up empty. The
@@ -173,6 +196,61 @@ From *Devshorts #115 & #116*, August 2026:
   **rotating riven art**, so the hash always changes. Fix is to hash only the static
   text band, which keeps "a new roll appeared" detection and ignores the animation.
 - `docs/SESSION-HANDOFF.md` is stale after all of the above.
+
+---
+
+## Linux support: wanted, deliberately last
+
+**Decision, 2026-09-30: finish Windows first, then Linux.** The user is on Windows 11
+with a CachyOS install on a second M.2 drive. The riven reader works on Windows only
+today, so switching the daily system before the Linux reader exists would mean not being
+able to test the app's flagship feature. CachyOS gets used for targeted testing until
+then, and the switch is a reward at the end rather than a handicap at the start.
+
+An audit of the current tree found the portability surface is small and already mostly
+in the right shape:
+
+- **Four** `process.platform` guards in `main.js`, three of which already have
+  `win32` / `darwin` branches rather than assuming Windows.
+- **No drive-letter paths anywhere.**
+- **No backslash path separators** in app code. `renderer.js` already normalises `\` to
+  `/` when comparing paths, which is the right instinct.
+- `desktopCapturer` is cross-platform in Electron.
+- **One** Windows-only shell-out: `tasklist.exe`, used to find the game process.
+
+### The two decisions that would be expensive to reverse
+
+1. **Put the riven memory reader behind an interface, not inline `process.platform`
+   checks.** Windows reads with `ReadProcessMemory`; Linux needs `process_vm_readv` and
+   is gated by `kernel.yama.ptrace_scope`. If the scanning pipeline calls a Windows
+   function directly, adding Linux becomes a rewrite of the pipeline instead of a new
+   file dropped into it.
+
+2. **Give `tasklist.exe` a non-Windows fallback** (`pgrep -f`). Cheap now, and it is the
+   kind of thing that gets forgotten and then blocks a launch.
+
+### What is known to be awkward on Linux, and is not solvable by us
+
+- **Overlays need layer-shell.** GNOME has no layer-shell at all, so overlays there are
+  best-effort or absent. X11 is the easy case. This is a compositor problem, not a port
+  problem.
+- **Memory reading is blocked by default.** Most distributions ship
+  `kernel.yama.ptrace_scope=1`; relaxing it lets any program read any other program's
+  memory. Linux users have to opt into that, which Windows users do not. Expect this to
+  be the main source of support questions.
+- Mission-log and worldstate features depend on Proton and on the `PROTON_LOG=1` launch
+  option.
+
+### Parked work
+
+`tools/linux-riven-scan.py` is written and **never executed**, because there is no Python
+on the Windows machine. It is a self-contained ctypes port of the Windows scanner and
+needs running on the CachyOS drive. Its whole purpose is to answer one question: does
+the riven summary still sit in memory as plain text under Proton? If it does not, the
+Linux riven reader is a different problem and that needs knowing before any port starts.
+
+`ptrace_scope` will almost certainly need relaxing on the CachyOS drive for the scan to
+return anything.
 
 ---
 

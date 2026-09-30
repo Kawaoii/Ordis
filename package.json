@@ -30,7 +30,7 @@
     "asar": true,
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.png",
+      "icon": "assets/ordis-mark.png",
       "artifactName": "Ordis-Setup-${version}.${ext}"
     },
     "linux": {
@@ -39,7 +39,8 @@
         "pacman"
       ],
       "artifactName": "Ordis-${version}-${arch}.${ext}",
-      "category": "Utility"
+      "category": "Utility",
+      "icon": "assets/ordis-mark.png"
     },
     "mac": {
       "target": [

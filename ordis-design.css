@@ -4243,3 +4243,22 @@ body.has-split-rail .settings-content { padding-bottom: 0 !important; }
 /* The name strip stays, because an unlabelled image is not a codex entry. It is the
    only chrome left on the tile. */
 .item-card-name { border-radius: 0; }
+
+/* Titlebar mark. The wordmark that used to sit beside the emblem is gone: the emblem
+   was the previous project's, and "ORDIS" in letterspaced caps repeated the window
+   title right next to it. A single pixel-art mark reads better at 20px and leaves the
+   app name to the OS, which already shows it in the taskbar and the Alt+Tab list. */
+.titlebar-logo { gap: 0; }
+
+.titlebar-logo img {
+  width: 20px;
+  height: 20px;
+  display: block;
+  /* The mark is pixel art. Smoothing it would blur the block edges, which is the only
+     thing the style is. */
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  opacity: 0.95;
+}
+
+.titlebar-logo:hover img { opacity: 1; }

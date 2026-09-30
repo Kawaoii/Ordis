@@ -1,7 +1,7 @@
 <table>
   <tr>
     <td width="96" valign="top">
-      <img src="assets/icon.png" alt="Warframe Companion App Icon" width="82" height="82" />
+      <img src="assets/ordis-mark.png" alt="Ordis" width="82" height="82" />
     </td>
     <td valign="top">
       <h1>Ordis</h1>

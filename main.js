@@ -1118,7 +1118,11 @@ async function runRivenWatchCycle() {
     const side = pickSelectedRivenCard(regions, rivenOverlaySelectedSide);
     if (!side) return;
     const region = regions[side];
-    const signature = side + ':' + crypto.createHash('sha1').update(region.image.toBitmap()).digest('hex');
+    /* Hash the static text band, not the card. The card's picture rotates while the
+     * card sits there, so hashing the whole card produced a different signature on
+     * every frame and the watch loop re-read a riven that had not changed. */
+    const signature = side + ':' + crypto.createHash('sha1')
+      .update(createRivenTextRegion(region).image.toBitmap()).digest('hex');
     if (signature === rivenOverlayWatchSignature) return;
     rivenOverlayWatchSignature = signature;
     rivenOverlaySelectedSide = side;
@@ -2020,12 +2024,21 @@ async function recognizeRivenRegion(capture, only) {
   for (const [side, card] of Object.entries(wanted)) {
     regions[side] = createRivenOcrRegion(capture.image, card);
   }
-  const parts = Object.values(regions).map((region) => region.image.toBitmap());
-  // Both cards go into the hash when both are read: a new roll appearing next to
-  // an unchanged previous roll is a different screen, and treating it as the same
-  // frame made the scan look like a duplicate.
+  /* Hash the text band, not the whole card.
+   *
+   * The card's picture rotates continuously while the card sits on screen, so hashing
+   * the card meant the hash changed on every single frame and every scan looked like a
+   * new one. That is what made the riven get re-read over and over while nothing about
+   * it had changed. The band below the picture is static, and it holds everything this
+   * function actually uses.
+   *
+   * Both cards still contribute, because a new roll appearing next to an unchanged
+   * previous roll is genuinely a different screen and must not be dismissed as a
+   * duplicate. */
   const imageHash = crypto.createHash('sha1');
-  for (const part of parts) imageHash.update(part);
+  for (const side of Object.keys(regions)) {
+    imageHash.update(createRivenTextRegion(regions[side]).image.toBitmap());
+  }
   const hash = imageHash.digest('hex');
   const now = Date.now();
 
