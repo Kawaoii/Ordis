@@ -18309,6 +18309,52 @@ card.addEventListener('auxclick', function(e) {
         }
       });
     }
+
+    // Read the collection straight out of the running game. Separate from the regrade
+    // button because it is a different job: that one re-reads data already saved, this
+    // one finds rivens that were never looked at.
+    var memoryBtn = $('#riven-memory-btn');
+    if (memoryBtn) {
+      var memoryLabel = $('#riven-memory-btn-label');
+      memoryBtn.addEventListener('click', async function() {
+        if (!window.electronAPI || !window.electronAPI.rivenMemoryScan) return;
+        memoryBtn.disabled = true;
+        var restore = memoryLabel ? memoryLabel.textContent : '';
+        if (memoryLabel) memoryLabel.textContent = 'Reading...';
+        setRivenStatus('Reading your rivens out of Warframe. Keep the game open; the first read is slower than the rest.', '');
+        try {
+          var res = await window.electronAPI.rivenMemoryScan({ force: true });
+          if (!res || !res.ok) {
+            setRivenStatus((res && res.message) || 'Could not read the game.', 'error');
+            return;
+          }
+
+          // Merged into the saved list rather than replacing it. A riven the player
+          // added by hand, or one the screen reader graded mid-reroll, is not thrown
+          // away because a memory read did not happen to see it.
+          var added = await window.electronAPI.rivenInventoryAddMany({ entries: res.entries || [] });
+          rivenInventory = (added && added.entries) || rivenInventory;
+          renderRivenInventory();
+
+          var secs = res.scannedMs ? (res.scannedMs / 1000).toFixed(1) + 's' : '';
+          var msg = 'Read ' + (res.entries || []).length + ' riven' +
+            ((res.entries || []).length === 1 ? '' : 's') + ' from the game' + (secs ? ' in ' + secs : '') + '.';
+          if (res.timedOut) {
+            // Stopping on the clock rather than on the collection being complete is a
+            // partial answer, and saying so is the whole point of this reader.
+            msg += ' Stopped early, so this may be incomplete. Reading again now that the app knows where to look is usually enough.';
+          } else if (res.cachedRegionsUsed) {
+            msg += ' Started from the ' + res.cachedRegionsUsed + ' regions that held them last time.';
+          }
+          setRivenStatus(msg, res.timedOut ? 'warn' : 'ok');
+        } catch (err) {
+          setRivenStatus('Read failed: ' + (err && err.message ? err.message : 'unknown error'), 'error');
+        } finally {
+          memoryBtn.disabled = false;
+          if (memoryLabel) memoryLabel.textContent = restore || 'Read from game';
+        }
+      });
+    }
   }
 
   // Refresh the tab after a scan files a new riven, but only when it is already

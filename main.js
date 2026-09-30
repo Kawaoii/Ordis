@@ -1967,11 +1967,18 @@ async function scanRivensFromMemory(options) {
     if (!script) return { ok: false, reason: 'script-missing' };
 
     const outFile = path.join(app.getPath('temp'), 'ordis-riven-memory.json');
-    const run = await execFileAsync('powershell', [
+    // Remembers which regions held the rivens. The first scan of a session walks the
+    // whole address space; after that it starts where the answers were, which is the
+    // difference between a visible pause and no pause at all.
+    const cacheFile = path.join(app.getPath('userData'), 'riven-memory-regions.txt');
+    const args = [
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
       '-Out', outFile,
+      '-Cache', cacheFile,
       '-MaxSeconds', String(settings.maxSeconds || 90)
-    ], RIVEN_MEMORY_TIMEOUT_MS);
+    ];
+    if (settings.rebuild) args.push('-RebuildCache');
+    const run = await execFileAsync('powershell', args, RIVEN_MEMORY_TIMEOUT_MS);
 
     let payload = null;
     try {
@@ -2003,7 +2010,7 @@ async function scanRivensFromMemory(options) {
     for (const block of payload.rivens || []) {
       let parsed = null;
       try {
-        parsed = parser.parseRivenOcr(block.text);
+        parsed = parser.parseRivenOcr(block.text, { fromMemory: true });
       } catch (err) {
         parsed = null;
       }
@@ -2017,6 +2024,10 @@ async function scanRivensFromMemory(options) {
         weaponName: parsed.weaponName || '',
         weaponNameCandidates: parsed.weaponNameCandidates || [],
         masterRank: parsed.masterRank,
+        // The class comes from the "mr 10 shotgun" trailer. Without it grading cannot
+        // work out the largest possible roll for these stats, because the maximum a
+        // stat can reach depends on the weapon it sits on.
+        rivenType: parsed.weaponClass || '',
         warnings: parsed.warnings || []
       });
     }
@@ -2027,7 +2038,11 @@ async function scanRivensFromMemory(options) {
       entries,
       scannedMs: payload.scannedMs,
       mbPerSec: payload.mbPerSec,
-      timedOut: !!payload.timedOut
+      // Worth showing, because a scan that ended on the clock rather than on the
+      // collection being complete is a partial answer and the player should know.
+      timedOut: !!payload.timedOut,
+      cachedRegionsUsed: payload.cachedRegionsUsed || 0,
+      cacheWritten: !!payload.cacheWritten
     };
     return rivenMemoryLastScan;
   })();
@@ -4126,6 +4141,14 @@ ipcMain.handle('riven-inventory-add', async (_event, entry) => {
   return { ok: true, entry: saved.entry, created: saved.created };
 });
 
+/* A whole memory read at once. Merges into the saved list rather than replacing it: a
+ * riven added by hand, or one the screen reader graded during a reroll, is not thrown
+ * away because a memory read did not happen to see it. */
+ipcMain.handle('riven-inventory-add-many', async (_event, payload) => {
+  const result = await addRivensToInventory((payload && payload.entries) || []);
+  return { ok: true, entries: result.entries, created: result.created };
+});
+
 ipcMain.handle('riven-inventory-update', async (_event, payload) => {
   const data = payload || {};
   if (!data.id) return { ok: false, message: 'No riven id given.' };
@@ -4140,9 +4163,84 @@ ipcMain.handle('riven-inventory-remove', async (_event, id) => {
   return { ok: true };
 });
 
+/* Bulk version of the above, for a whole memory read.
+ *
+ * Calling addRivenToInventory in a loop would read, re-sort and rewrite the entire
+ * saved file once per riven. A player with a hundred-odd rivens would pay a hundred
+ * file rewrites to add what is really one change, and the file is the thing being read
+ * while the game is being read. Normalising first, then writing once, keeps the cost
+ * proportional to the result instead of to the collection.
+ */
+async function addRivensToInventory(list) {
+  const incoming = Array.isArray(list) ? list : [];
+  if (!incoming.length) {
+    return { entries: await readRivenInventory(), created: 0 };
+  }
+
+  // One icon fetch for every class present, rather than one per riven.
+  const classes = [];
+  for (const raw of incoming) {
+    const cls = raw && (raw.rivenType || raw.weaponClass);
+    if (cls && classes.indexOf(cls) === -1) classes.push(cls);
+  }
+  await ensureRivenModIcons(classes);
+
+  const normalized = [];
+  for (const raw of incoming) {
+    const entry = normalizeRivenInventoryEntry(raw);
+    if (entry) normalized.push(entry);
+  }
+  if (!normalized.length) {
+    return { entries: await readRivenInventory(), created: 0 };
+  }
+
+  const entries = await readRivenInventory();
+  // Fingerprints are computed once and reused for both the match and the trim, rather
+  // than recomputed inside the per-riven search.
+  const index = new Map();
+  entries.forEach((e, i) => {
+    const key = rivenStatsFingerprint(e);
+    if (!index.has(key)) index.set(key, i);
+  });
+
+  let created = 0;
+  const merged = [];
+  for (const entry of normalized) {
+    const key = rivenStatsFingerprint(entry);
+    const at = index.get(key);
+    if (at !== undefined) {
+      const prev = entries[at];
+      const updated = Object.assign({}, prev, {
+        grade: entry.grade || prev.grade,
+        gradeLabel: entry.gradeLabel || prev.gradeLabel,
+        score: entry.score != null ? entry.score : prev.score,
+        perfectness: entry.perfectness != null ? entry.perfectness : prev.perfectness,
+        reasons: entry.reasons.length ? entry.reasons : prev.reasons,
+        lastSeenAt: Date.now()
+      });
+      // Re-reads of the same riven arrive in one batch, so the last one wins rather
+      // than the first being frozen for the rest of the run.
+      if (merged[at]) merged[at] = updated; else entries[at] = updated;
+      continue;
+    }
+    entry.lastSeenAt = Date.now();
+    index.set(key, entries.length + merged.length);
+    merged.push(entry);
+    created++;
+  }
+
+  const out = entries.concat(merged)
+    .slice()
+    .sort(function (a, b) { return (b.lastSeenAt || 0) - (a.lastSeenAt || 0); })
+    .slice(0, RIVEN_INVENTORY_MAX);
+  await writeRivenInventory(out);
+  return { entries: out, created };
+}
+
 /* ============================================================
    Riven re-grade
    ------------------------------------------------------------
+
    The community grade sheet and the weapon dispositions both move, and
    dispositions change with every Prime Access. Re-grading from the stored
    stats means a riven saved months ago is not stuck with a stale verdict.

@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   rivenInventoryList: () => ipcRenderer.invoke('riven-inventory-list'),
   rivenMemoryScan: (options) => ipcRenderer.invoke('riven-memory-scan', options || {}),
   rivenInventoryAdd: (entry) => ipcRenderer.invoke('riven-inventory-add', entry || {}),
+  rivenInventoryAddMany: (payload) => ipcRenderer.invoke('riven-inventory-add-many', payload || { entries: [] }),
   rivenInventoryUpdate: (id, patch) => ipcRenderer.invoke('riven-inventory-update', { id, patch: patch || {} }),
   rivenInventoryRemove: (id) => ipcRenderer.invoke('riven-inventory-remove', id),
   rivenInventoryRegrade: () => ipcRenderer.invoke('riven-inventory-regrade'),

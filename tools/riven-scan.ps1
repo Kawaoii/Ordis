@@ -29,6 +29,12 @@ param(
   # the app needs an answer in seconds, not minutes.
   [int]$MaxSeconds = 90,
   [ValidateSet('all', 'nost', 'image')][string]$Regions = 'nost',
+  # Remembers which regions actually held rivens, so later scans start there instead of
+  # rediscovering them. Costs one full walk once, then almost nothing.
+  [string]$Cache = '',
+  # Throw the memory away and walk the whole space again. Needed after a restart if the
+  # first scan found few or no rivens, since a thin result poisons the memory.
+  [switch]$RebuildCache,
   [switch]$Quiet
 )
 $ErrorActionPreference = 'Stop'
@@ -68,6 +74,9 @@ public static class RivenScan {
   public static int BytesRead = 0;
   public static int RegionsRead = 0;
   public static long RegionsSkipped = 0;
+  // How many remembered regions this scan started from. Zero means there was no cache
+  // yet and the whole space was walked, which only has to happen once.
+  public static int CachedRegionsUsed = 0;
 
   const uint MEM_COMMIT = 0x1000;
   const uint MEM_IMAGE = 0x1000000;
@@ -216,7 +225,24 @@ public static class RivenScan {
     return string.Join("\n", kept.ToArray()).Trim();
   }
 
-  public static List<Found> Run(int pid, int stopAfter, int maxSeconds, string regionMode) {
+  /* Finds the region that contains an address, by binary search over a region list
+   * sorted by start address. Used to remember which regions are worth reading again
+   * instead of rediscovering them every scan. */
+  public static long RegionStartFor(long addr) {
+    int lo = 0, hi = AllByStart.Count - 1, best = -1;
+    while (lo <= hi) {
+      int mid = (int)((lo + hi) / 2);
+      if (AllByStart[mid].Start <= addr) { best = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    if (best < 0) return -1;
+    long end = AllByStart[best].Start + AllByStart[best].Size;
+    return addr < end ? AllByStart[best].Start : -1;
+  }
+
+  public static List<Reg> AllByStart = new List<Reg>();
+
+  public static List<Found> Run(int pid, int stopAfter, int maxSeconds, string regionMode, long[] preferredStarts) {
     var found = new List<Found>();
     var seen = new HashSet<string>();
     var watch = Stopwatch.StartNew();
@@ -226,28 +252,61 @@ public static class RivenScan {
       int mbiSize = Marshal.SizeOf(typeof(MBI));
       byte[] buf = new byte[CHUNK + MAX_STRING + TOOLS];
       long max = 0x00007FFFFFFFFFFF, addr = 0;
-      while (addr < max && found.Count < stopAfter && watch.Elapsed.TotalSeconds < maxSeconds) {
+      var order = new List<Reg>();
+      while (addr < max) {
         MBI m;
         if (VirtualQueryEx(h, (IntPtr)addr, out m, (IntPtr)mbiSize) == IntPtr.Zero) break;
         long start = m.BaseAddress.ToInt64();
         long size = (long)m.RegionSize.ToUInt64();
         if (size <= 0) break;
+        if (m.State == MEM_COMMIT && (m.Protect & 0x01) == 0 && (m.Protect & 0x100) == 0) {
+          order.Add(new Reg { Start = start, Size = size, Type = m.Type, Protect = m.Protect });
+        }
+        addr = start + size;
+      }
 
-        bool readable = m.State == MEM_COMMIT && (m.Protect & 0x01) == 0 && (m.Protect & 0x100) == 0;
+      // Kept in address order for lookups, because the reading order below is by size
+      // and the two have to be reconciled when a hit is turned back into a region.
+      AllByStart = new List<Reg>(order);
+      AllByStart.Sort(delegate(Reg a, Reg b) { return a.Start.CompareTo(b.Start); });
+
+      // Regions previously proven to hold rivens go first. A repeat scan then costs the
+      // same as reading a few hundred megabytes rather than the whole address space,
+      // which is the difference between instant and a visible pause.
+      var regions = new List<Reg>();
+      if (preferredStarts != null && preferredStarts.Length > 0) {
+        var preferred = new HashSet<long>(preferredStarts);
+        for (int i = 0; i < order.Count; i++) if (preferred.Contains(order[i].Start)) regions.Add(order[i]);
+        CachedRegionsUsed = regions.Count;
+        for (int i = 0; i < order.Count; i++) if (!preferred.Contains(order[i].Start)) regions.Add(order[i]);
+      } else {
+        // Otherwise smallest first. The address space is mostly a few enormous
+        // allocations, and the small private heaps are where string data lives, so this
+        // finds the collection long before touching the giants and hits the stopping
+        // count. Address order would read all of it first.
+        regions.AddRange(order);
+        regions.Sort(delegate(Reg a, Reg b) { return a.Size.CompareTo(b.Size); });
+      }
+
+      for (int ri = 0; ri < regions.Count; ri++) {
+        if (found.Count >= stopAfter || watch.Elapsed.TotalSeconds >= maxSeconds) break;
+        Reg r = regions[ri];
+        long start = r.Start, size = r.Size;
+
+        bool readable = (r.Protect & 0x01) == 0 && (r.Protect & 0x100) == 0;
         // The executable's own code and read-only data is never player state. It is a
         // large slice of the address space and costs the same to walk as anything else.
         bool skip = !readable
-          || (regionMode == "nost" && m.Type == MEM_IMAGE)
-          || (regionMode == "image" && m.Type != MEM_IMAGE);
-        if (skip) { RegionsSkipped++; }
-        else {
-          long pos = start;
+          || (regionMode == "nost" && r.Type == MEM_IMAGE)
+          || (regionMode == "image" && r.Type != MEM_IMAGE);
+        if (skip) { RegionsSkipped++; continue; }
+        {
+          long pos = 0;
           int carry = 0;
           while (pos < size && found.Count < stopAfter && watch.Elapsed.TotalSeconds < maxSeconds) {
             int want = (int)Math.Min((long)CHUNK, size - pos);
-            IntPtr at = (IntPtr)(pos - carry);
             IntPtr got;
-            if (!ReadProcessMemory(h, (IntPtr)(start + at.ToInt64()), buf, (IntPtr)(want + carry), out got)) break;
+            if (!ReadProcessMemory(h, (IntPtr)(start + pos - carry), buf, (IntPtr)(want + carry), out got)) break;
             int have = (int)got.ToInt64();
             if (have <= 0) break;
             if (have > want + carry) have = want + carry;
@@ -277,7 +336,6 @@ public static class RivenScan {
             pos += want;
           }
         }
-        addr = start + size;
       }
     } finally { CloseHandle(h); }
     return found;
@@ -295,9 +353,43 @@ if (-not $proc) {
   exit 1
 }
 
+$preferred = @()
+if ($Cache -and -not $RebuildCache -and (Test-Path -LiteralPath $Cache)) {
+  try {
+    $cached = Get-Content -LiteralPath $Cache -Raw | ConvertFrom-Json
+    if ($cached) { $preferred = @($cached | ForEach-Object { [long]$_ }) }
+  } catch {
+    # A corrupt cache is not a reason to fail. Falling back to a full walk costs time,
+    # not correctness, and it rewrites a good cache on the way out.
+    $preferred = @()
+  }
+}
+
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-$found = [RivenScan]::Run($proc.Id, $StopAfter, $MaxSeconds, $Regions)
+$found = [RivenScan]::Run($proc.Id, $StopAfter, $MaxSeconds, $Regions, $preferred)
 $sw.Stop()
+
+# Remember the regions the hits came from, so the next scan can start there. Only kept
+# when the result looks complete: a scan that timed out or found almost nothing would
+# otherwise record a region that happens not to hold the rest, and every later scan
+# would trust that thin answer.
+$cacheWritten = $false
+if ($Cache) {
+  $hits = New-Object 'System.Collections.Generic.HashSet[long]'
+  foreach ($f in $found) {
+    $rs = [RivenScan]::RegionStartFor([Convert]::ToInt64($f.Address, 16))
+    if ($rs -ge 0) { $null = $hits.Add($rs) }
+  }
+  if ($found.Count -ge 20 -and $hits.Count -gt 0) {
+    try {
+      [System.IO.File]::WriteAllText(
+        $Cache,
+        (@($hits) | ForEach-Object { $_.ToString() }) -join "`n",
+        [System.Text.UTF8Encoding]::new($false))
+      $cacheWritten = $true
+    } catch { }
+  }
+}
 
 $json = [pscustomobject]@{
   pid = $proc.Id
@@ -305,6 +397,8 @@ $json = [pscustomobject]@{
   mbPerSec = [math]::Round(([RivenScan]::BytesRead / 1MB) / [math]::Max(0.001, $sw.Elapsed.TotalSeconds), 1)
   bytesRead = [RivenScan]::BytesRead
   regionsSkipped = [RivenScan]::RegionsSkipped
+  cachedRegionsUsed = [RivenScan]::CachedRegionsUsed
+  cacheWritten = $cacheWritten
   timedOut = ($found.Count -ge $StopAfter)
   count = $found.Count
   rivens = @($found | ForEach-Object { [pscustomobject]@{ address = $_.Address; text = $_.Text } })
@@ -315,6 +409,9 @@ if (-not $Quiet) {
   Write-Output ("found " + $found.Count + " riven(s) in " + [int]$sw.Elapsed.TotalMilliseconds + "ms")
   Write-Output ("  read " + [math]::Round([RivenScan]::BytesRead / 1MB, 0) + " MB at " +
     [math]::Round(([RivenScan]::BytesRead / 1MB) / [math]::Max(0.001, $sw.Elapsed.TotalSeconds), 1) + " MB/s")
+  if ([RivenScan]::CachedRegionsUsed -gt 0) { Write-Output ("  started from " + [RivenScan]::CachedRegionsUsed + " remembered region(s)") }
+  else { Write-Output ("  full walk (no region cache yet)") }
   Write-Output ("  skipped " + [RivenScan]::RegionsSkipped + " regions")
+  if ($cacheWritten) { Write-Output ("  cached the regions that held them, next scan starts there") }
   foreach ($r in $found) { Write-Output ("  --- " + $r.Address); Write-Output ("    " + ($r.Text -replace "`n", " | ")) }
 }

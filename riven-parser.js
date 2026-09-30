@@ -297,10 +297,75 @@ function looksLikeWeaponName(line) {
  * @param {string} rawText raw tesseract output
  * @returns {Object|null} structured parse, or null when nothing usable was found
  */
-function parseRivenOcr(rawText) {
+/**
+ * Restore the game's own capitalisation and hyphenation to a name line read from
+ * memory. "sobek acri vexidra" becomes "Sobek Acri-Vexidra", which is what the wiki,
+ * the dispositions and the rest of this app all use.
+ *
+ * Only ever applied to memory text, never to OCR: capitalising an OCR line would turn
+ * its debris into something that looks like a valid title-case name.
+ */
+function titleCaseRivenName(line) {
+  const text = String(line || '').trim();
+  if (!text || /[0-9%]/.test(text)) return text;
+  const words = text.split(/\s+/);
+  if (words.length < 2 || words.length > 5) return text;
+  // The riven name is the trailing pair. Hyphenating it back is what lets the normal
+  // name split recognise it; without the hyphen "acri vexidra" is just two words.
+  const titled = words.map(function (w) {
+    return w.charAt(0).toUpperCase() + w.slice(1);
+  });
+  if (titled.length >= 3) {
+    titled[titled.length - 2] = titled[titled.length - 2] + '-' + titled[titled.length - 1];
+    titled.pop();
+  }
+  return titled.join(' ');
+}
+
+/**
+ * The "x1.04 damage to grineer" form. A handful of rivens carry these instead of a
+ * percentage, and they are real bonuses that must be graded, not dropped because they
+ * have no percent sign. parseStatLine cannot see them: it needs a number, and here the
+ * value is behind the x.
+ */
+function parseMultiplierLine(line) {
+  const text = String(line || '').trim();
+  const m = text.match(/^x\s*(\d+(?:\.\d+)?)\s+(.+)$/i);
+  if (!m) return null;
+  const value = parseFloat(m[1]);
+  if (!isFinite(value) || value <= 0) return null;
+  const name = m[2].replace(/\s*\(.*$/, '').trim();
+  if (!name || isChrome(name)) return null;
+  // Expressed as a multiple, so x1.04 is 4%, not 1.04%. Rounded to two places because
+  // that is the resolution the card itself shows.
+  return { name: name, value: Math.round((value - 1) * 10000) / 100 };
+}
+
+function parseRivenOcr(rawText, options) {
   if (!rawText || typeof rawText !== 'string') return null;
 
-  const lines = rawText.split('\n').map((l) => l.replace(/\s+/g, ' ').trim());
+  // Text read out of game memory is not OCR and must not be treated as OCR. It differs
+  // in three ways that each cost a stat or the whole weapon name:
+  //   - it is all lowercase, while every published weapon name is title case;
+  //   - the riven name is stored space separated, "Acri-Vexidra" as "acri vexidra";
+  //   - the "mr 10 shotgun" trailer sits on the end of the last stat line, so leaving
+  //     it there turns that stat's name into "fire rate (x2 for bows) mr 10 shotgun"
+  //     and the last stat of every riven is thrown away.
+  // The caller knows which source it has, so it says rather than the parser guessing.
+  const fromMemory = !!(options && options.fromMemory);
+  let body = rawText;
+  let trailerClass = null;
+  let trailerMr = null;
+  if (fromMemory) {
+    const trailer = body.match(/\s*mr\s*(\d{1,2})\s+([a-z]+)\s*$/i);
+    if (trailer) {
+      trailerClass = trailer[2].toLowerCase();
+      trailerMr = parseInt(trailer[1], 10);
+      body = body.slice(0, trailer.index);
+    }
+  }
+
+  const lines = body.split('\n').map((l) => l.replace(/\s+/g, ' ').trim());
 
   const result = {
     weaponName: null,
@@ -310,7 +375,8 @@ function parseRivenOcr(rawText) {
     unresolvedStats: [],
     lockedTrait: false,
     challengeScreen: false,
-    masterRank: null,
+    masterRank: trailerMr,
+    weaponClass: trailerClass,
     warnings: [],
     rawText: rawText
   };
@@ -355,7 +421,15 @@ function parseRivenOcr(rawText) {
 
     if (isChrome(line)) continue;
 
-    const stat = parseStatLine(line);
+    // Memory stores the riven name space separated rather than hyphenated, and in lower
+    // case. Restored to the game's own spelling here so the normal title-case test and
+    // the normal name split both work unchanged below, and so a riven read from memory
+    // and one read from the screen produce the same name rather than two spellings.
+    const normalised = fromMemory ? titleCaseRivenName(line) : line;
+  // x1.04 damage to grineer. Tried first, because parseStatLine would happily read the
+  // "1.04" as the stat value and grade a 4% bonus as 1.04%. A multiplier is stated as
+  // a multiple, so 1.04 is 4% above base.
+  const stat = (fromMemory ? parseMultiplierLine(normalised) : null) || parseStatLine(normalised);
     if (stat) {
       // The card is two columns, so a multi-word name can be split across lines
       // ("+88.7% Heavy Attack" / "Efficiency"). Try the join *before* committing,
@@ -394,8 +468,8 @@ function parseRivenOcr(rawText) {
       continue;
     }
 
-    if (looksLikeWeaponName(line)) {
-      const cleaned = line.replace(/^[^A-Za-z]+/, '').replace(/\s+/g, ' ').trim();
+    if (looksLikeWeaponName(normalised)) {
+      const cleaned = normalised.replace(/^[^A-Za-z]+/, '').replace(/\s+/g, ' ').trim();
       const split = splitWeaponAndRivenName(cleaned);
       /* Keep every plausible name, best first. OCR puts fragments above the real
        * weapon name ("No BE" ahead of "= | Ceramic Dagger"), so a single guess
