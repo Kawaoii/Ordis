@@ -454,14 +454,27 @@
 
     panesHost.textContent = '';
 
-    // Anything that was in a pane but no longer is goes back to the workspace, so a
-    // closed pane does not take its panel out of the app with it.
+    /* Anything that was in a pane but no longer is goes back to the workspace, so a
+     * closed pane does not take its panel out of the app with it.
+
+       The guard this used to carry - only re-append an element whose parent was already
+       the workspace - made the whole loop a no-op. `textContent = ''` above detaches
+       every orphan outright, so by the time this ran each one had a null parent and
+       compared false against the workspace. Nothing was ever restored, and every tab
+       switch silently deleted the panel it switched away from: the element left the DOM
+       and that tab could never be opened again. Settings was where it showed, because it
+       is the last tab and so the one a pass through the rail always lands on last.
+
+       Orphans are collected from inside pane bodies and nothing else, so every one of
+       them belongs in the workspace now. Still-open ones are left alone; they are placed
+       into panes below. */
     var stillOpen = wanted.slice();
     orphans.forEach(function (el) {
-      if (stillOpen.indexOf(el.id) === -1 && el.parentNode === panesHost.parentNode) {
+      if (stillOpen.indexOf(el.id) === -1) {
         panesHost.parentNode.appendChild(el);
       }
     });
+
 
     if (!wanted.length) {
       panesHost.classList.add('is-empty');
