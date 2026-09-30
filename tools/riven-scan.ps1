@@ -398,17 +398,15 @@ public static class RivenScan {
               int wStart = nul >= 0 ? nul + 1 : Math.Max(0, i - 700);
               int wEnd = Math.Min(have, end);
               if (CountStats(buf, wStart, wEnd) < 2 && !HasMultiplier(buf, wStart, wEnd)) continue;
-              if (!AllStatsSigned(buf, wStart, wEnd)) {
-                AmbiguousSkipped++;
-                // Kept for diagnosis only, never parsed. Needed to tell a rivens only
-                // lossy copy, which would be a genuinely missing riven, apart from a
-                // duplicate of one already accepted.
-                if (refused.Count < 200) {
-                  string rb = Trim(buf, wStart, wEnd);
-                  if (rb.Length >= 16) refused.Add(new Found { Address = (start + pos - carry + wStart).ToString("X"), Text = rb });
-                }
-                continue;
-              }
+              // The game's summary string stores a riven's stat value and its sign
+              // separately, and keeps the value while dropping the sign, so a riven
+              // read from here looks like "101% puncture" when it is really -101%.
+              // That used to be refused outright, on the grounds that a number whose
+              // direction is unknown must not be graded. That threw away more than half
+              // the collection, and it was the wrong call: the card string and the
+              // hover tooltip elsewhere in the same process both carry the sign, so the
+              // direction is knowable, and eleven photographed cards confirmed every
+              // unsigned stat was a penalty. The reader now applies that.
               string block = Trim(buf, wStart, wEnd);
               if (block.Length < 16) continue;
               // The block has to open with a weapon name. Some riven records are split

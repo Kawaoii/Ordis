@@ -2006,7 +2006,13 @@ async function scanRivensFromMemory(options) {
     // and one read from the screen go down one code path and cannot drift apart.
     const parser = getRivenParserModule();
     const entries = [];
-    const seen = new Set();
+    // Keyed on the weapon rather than on the values. The same riven is found more than
+    // once, and the copies are not always current: the game's list string is rebuilt
+    // when the list is drawn, so a riven that has been ranked since can still be
+    // present at its old address with its old numbers. Ranking only ever raises a
+    // riven's values, never lowers them, so the largest copy seen is the current one.
+    // Keeping both would show the same riven twice at two different values.
+    const byWeapon = new Map();
     for (const block of payload.rivens || []) {
       let parsed = null;
       try {
@@ -2015,10 +2021,7 @@ async function scanRivensFromMemory(options) {
         parsed = null;
       }
       if (!parsed || !parsed.stats || !parsed.stats.length) continue;
-      const key = parsed.stats.map((s) => s.name + ':' + Math.round(s.value * 10)).sort().join('|');
-      if (seen.has(key)) continue;
-      seen.add(key);
-      entries.push({
+      const entry = {
         text: block.text,
         stats: parsed.stats,
         weaponName: parsed.weaponName || '',
@@ -2029,8 +2032,16 @@ async function scanRivensFromMemory(options) {
         // stat can reach depends on the weapon it sits on.
         rivenType: parsed.weaponClass || '',
         warnings: parsed.warnings || []
-      });
+      };
+      // Two different riven names on one weapon, as in a Phenmor Conci-Vexinok and a
+      // Phenmor Cronitox, are genuinely two rivens and must both survive. Only copies
+      // of the same riven name get collapsed, so the key includes it.
+      const key = (entry.weaponName || '?') + '|' + (entry.weaponNameCandidates[1] || '');
+      const total = entry.stats.reduce((sum, s) => sum + Math.abs(s.value), 0);
+      const held = byWeapon.get(key);
+      if (!held || total > held.total) byWeapon.set(key, { total, entry });
     }
+    for (const held of byWeapon.values()) entries.push(held.entry);
 
     rivenMemoryLastScan = {
       ok: true,

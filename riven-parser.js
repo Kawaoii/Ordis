@@ -164,7 +164,11 @@ function trimStatName(rawName) {
   return name.trim();
 }
 
-function parseStatLine(line) {
+/**
+ * @param {boolean} bareIsNegative  true when the source strips the sign, so a value with
+ *   no marker is a penalty. See the note at the "^\s*%" branch.
+ */
+function parseStatLine(line, bareIsNegative) {
   if (!line) return null;
   // A space inside a decimal is OCR splitting the fraction, not a real gap: a
   // live frame read "+88 .3% Status Duration", and taking the "3" as the value
@@ -229,7 +233,20 @@ function parseStatLine(line) {
     return { value: number, name: name, isPositive: false };
   }
   if (/^\s*%/.test(after)) {
-    return { value: number, name: name, isPositive: true };
+    // A bare percent with no sign means "positive" when the text came off a card,
+    // because the card always draws the sign. It means the opposite when it came out of
+    // game memory: the game stores the value and the sign separately, and the summary
+    // string keeps the value and drops the sign, so a stat with no marker here is the
+    // riven's penalty. Verified against eleven photographed cards, where every one of
+    // the eleven unsigned stats was negative, and on one of them the reader had the
+    // value right and only the direction wrong.
+    return { value: number, name: name, isPositive: !bareIsNegative };
+  }
+  // The same thing for the seconds form, "6.7s Combo Duration". Without this the stat
+  // matched nothing at all and was dropped, which is how a melee riven could come back
+  // with three of its four stats.
+  if (/^\s*s\b/i.test(after)) {
+    return { value: number, name: name, isPositive: !bareIsNegative };
   }
 
   // A bare fraction with no marker, e.g. "0.72 Damage to Infested". Under 1 is a
@@ -428,8 +445,9 @@ function parseRivenOcr(rawText, options) {
     const normalised = fromMemory ? titleCaseRivenName(line) : line;
   // x1.04 damage to grineer. Tried first, because parseStatLine would happily read the
   // "1.04" as the stat value and grade a 4% bonus as 1.04%. A multiplier is stated as
-  // a multiple, so 1.04 is 4% above base.
-  const stat = (fromMemory ? parseMultiplierLine(normalised) : null) || parseStatLine(normalised);
+  // a multiple, so 1.04 is 4% above base, and the value itself carries the direction
+  // either way, so the sign-stripping problem does not touch this form.
+  const stat = (fromMemory ? parseMultiplierLine(normalised) : null) || parseStatLine(normalised, fromMemory);
     if (stat) {
       // The card is two columns, so a multi-word name can be split across lines
       // ("+88.7% Heavy Attack" / "Efficiency"). Try the join *before* committing,
