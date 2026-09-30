@@ -13,14 +13,31 @@
         one as a second pane. The divider between them drags, and either pane can
         be closed.
 
-   WHY SEAMLESS MATTERS MORE THAN IT SOUNDS
-   -----------------------------------------
-   Two panes with a gap and rounded corners do not read as one window, they read as
-   two windows sitting near each other. The gap shows the desktop behind, the
-   corners show it too, and the whole thing stops looking like a single surface. So
-   the split container is a flex row with no gap, the panes have square corners, and
-   the only thing between them is a one pixel rule. Nothing floats above them either:
-   no shadow, no margin, nothing that implies separation.
+   THREE PANES, THREE ARRANGEMENTS, NO OTHERS
+   -------------------------------------------
+   The layout used to be hardcoded to exactly two panes in one row with a single
+   divider, which meant a third panel could not be opened at all and the only
+   arrangement on offer was side by side. It is now up to three, and there are
+   exactly three ways they can sit:
+
+     1. one pane, filling everything
+     2. two panes side by side
+     3. one pane on the left, two stacked on the right
+
+   Those are the only three. A free-form grid is what produces the mess in the
+   screenshots: a pane dragged to a quarter of the window, a third one wedged into
+   whatever space was left, rows of unequal height. Constraining the shape is what
+   makes a drag predictable. Adding a fourth pane when three are open replaces the
+   oldest rather than reflowing everything.
+
+   WHY NOTHING IS EVER LEFT BROKEN
+   ------------------------------
+   A drag that moves a pane and re-renders the whole layout on every pointer frame is
+   what produced panes stuck half off screen and dividers detached from their
+   content. The pane under the pointer is never moved. Instead the arrangement is
+   computed and a preview outline is drawn in the space that pane will occupy, and
+   nothing changes until the pointer is released. There is no state in which a pane
+   is out of place, because a pane is only ever either in its slot or not yet.
 
    WHY THE PANELS ARE MOVED, NOT CLONED
    -------------------------------------
@@ -39,18 +56,30 @@
 (function () {
   'use strict';
 
-  var STORE_KEY = 'ordis.split.v1';
+  var STORE_KEY = 'ordis.split.v2';
   var RAIL_WIDTH = 60;
   var DIVIDER_MIN = 260;   // px, so a pane can never be dragged shut entirely
   var DRAG_THRESHOLD = 6;  // px before a press on the rail becomes a drag
+  var MAX_PANES = 3;
 
   var rail = null;
   var workspace = null;
   var panesHost = null;
   var ghost = null;
-  var state = { panes: [], ratio: 0.5 };
+  var state = { panes: [], ratio: 0.5, columnRatio: 0.5, rowRatio: 0.5 };
   var drag = null;
   var dividerDrag = null;
+
+  /* The three arrangements, as a function of how many panes are open.
+   *
+   * One and two panes are forced. Three has a choice, and the choice is remembered,
+   * so a layout the player built by dragging is the one they get back after a
+   * restart. `threeTall` means one on the left and two stacked on the right. */
+  function layoutFor(count, preferred) {
+    if (count <= 1) return 'single';
+    if (count === 2) return 'row';
+    return preferred === 'row' ? 'row' : 'threeTall';
+  }
 
   function dock() {
     return window.OrdisDock || null;
@@ -67,8 +96,32 @@
     return null;
   }
 
+  /* Resolve a panel's element by reference, not by selector.
+   *
+   * renderPanes empties the host with textContent = '' before rebuilding, which detaches
+   * every panel element from the document. A querySelector after that finds nothing, and
+   * the pane came out empty. The element is captured first and re-attached by reference,
+   * so emptying the host cannot lose it. Elements already inside a pane are looked up
+   * there rather than by selector, which is the same problem one step earlier. */
   function elFor(panel) {
-    return panel ? document.querySelector(panel.el) : null;
+    if (!panel) return null;
+    var inPane = panesHost && panesHost.querySelector(panel.el);
+    if (inPane) return inPane;
+    return document.querySelector(panel.el);
+  }
+
+  /* Called before the host is emptied, so every panel element is captured while it is
+   * still in the document. */
+  function capturePanelElements(ids) {
+    var found = {};
+    ids.forEach(function (id) {
+      var panel = panelById(id);
+      if (!panel) return;
+      var el = panesHost ? panesHost.querySelector(panel.el) : null;
+      if (!el) el = document.querySelector(panel.el);
+      if (el) found[id] = el;
+    });
+    return found;
   }
 
   /* ---------------------------------------------------------
@@ -81,20 +134,29 @@
 
     var kept = [];
     var seen = {};
-    (Array.isArray(raw.panes) ? raw.panes : []).slice(0, 2).forEach(function (id) {
+    (Array.isArray(raw.panes) ? raw.panes : []).slice(0, MAX_PANES).forEach(function (id) {
       // A saved id that no longer resolves would render an empty pane forever, so it
       // is dropped here instead of at paint time.
       if (panelById(id) && !seen[id]) { seen[id] = true; kept.push(id); }
     });
     if (kept.length) state.panes = kept;
 
-    var r = Number(raw.ratio);
-    if (isFinite(r) && r > 0.15 && r < 0.85) state.ratio = r;
+    ['ratio', 'columnRatio', 'rowRatio'].forEach(function (key) {
+      var r = Number(raw[key]);
+      if (isFinite(r) && r > 0.15 && r < 0.85) state[key] = r;
+    });
+    if (raw.threeLayout === 'row' || raw.threeLayout === 'threeTall') state.threeLayout = raw.threeLayout;
   }
 
   function save() {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ panes: state.panes, ratio: state.ratio }));
+      localStorage.setItem(STORE_KEY, JSON.stringify({
+        panes: state.panes,
+        ratio: state.ratio,
+        columnRatio: state.columnRatio,
+        rowRatio: state.rowRatio,
+        threeLayout: state.threeLayout
+      }));
     } catch (e) { /* private mode: the layout just will not persist */ }
   }
 
@@ -182,32 +244,58 @@
      --------------------------------------------------------- */
   function renderPanes() {
     if (!panesHost) return;
+
+    /* Everything is resolved before anything is removed. Emptying the host detaches
+     * whatever was in it, so a panel looked up afterwards is simply gone, and the pane
+     * renders empty. This is the single reason the three-pane layout showed one pane. */
+    var wanted = state.panes.slice(0, MAX_PANES);
+    var captured = capturePanelElements(wanted);
+    var orphans = [];
+    Array.prototype.slice.call(panesHost.querySelectorAll('.split-pane-body > *')).forEach(function (el) {
+      orphans.push(el);
+    });
+
     panesHost.textContent = '';
 
     // Anything that was in a pane but no longer is goes back to the workspace, so a
     // closed pane does not take its panel out of the app with it.
-    var stillOpen = state.panes.slice();
-    Array.prototype.slice.call(panesHost.querySelectorAll('.split-pane-body > *')).forEach(function (el) {
+    var stillOpen = wanted.slice();
+    orphans.forEach(function (el) {
       if (stillOpen.indexOf(el.id) === -1 && el.parentNode === panesHost.parentNode) {
         panesHost.parentNode.appendChild(el);
       }
     });
 
-    if (!state.panes.length) {
+    if (!wanted.length) {
       panesHost.classList.add('is-empty');
+      panesHost.removeAttribute('data-layout');
       return;
     }
     panesHost.classList.remove('is-empty');
 
-    state.panes.forEach(function (id, index) {
+    var layout = layoutFor(wanted.length, state.threeLayout);
+    panesHost.setAttribute('data-layout', layout);
+
+    /* The arrangement is expressed as nesting, not as one flat flex row.
+     *
+     * A three-pane layout with one tall pane and two stacked ones cannot be built from
+     * a single row of siblings: the two on the right have to be in a column together or
+     * the row grows to three and the heights are wrong. So for that one arrangement a
+     * column is built, the two right-hand panes and their divider go into it, and the
+     * left pane and its divider sit beside it. Every other arrangement is a plain row.
+     *
+     * The divider is created with the pane it separates rather than appended at the end,
+     * which is what put a single divider in the wrong place once there was more than
+     * one. */
+    function makePane(id, slot) {
       var panel = panelById(id);
-      var el = elFor(panel);
-      if (!panel || !el) return;
+      var el = captured[id];
+      if (!panel || !el) return null;
 
       var pane = document.createElement('section');
       pane.className = 'split-pane';
       pane.dataset.panel = id;
-      pane.dataset.slot = index === 0 ? 'primary' : 'secondary';
+      pane.dataset.slot = slot;
 
       var head = document.createElement('header');
       head.className = 'split-pane-head';
@@ -225,17 +313,39 @@
 
       pane.appendChild(head);
       pane.appendChild(body);
-      panesHost.appendChild(pane);
       body.appendChild(el);
-    });
+      return pane;
+    }
 
-    if (state.panes.length > 1 && !panesHost.querySelector('.split-divider')) {
+    function makeDivider(axis) {
       var divider = document.createElement('div');
       divider.className = 'split-divider';
       divider.setAttribute('role', 'separator');
-      divider.setAttribute('aria-orientation', 'vertical');
+      divider.setAttribute('aria-orientation', axis === 'row' ? 'horizontal' : 'vertical');
+      divider.dataset.axis = axis;
       divider.title = 'Drag to resize';
-      panesHost.appendChild(divider);
+      return divider;
+    }
+
+    if (layout === 'threeTall') {
+      var column = document.createElement('div');
+      column.className = 'split-column';
+      var left = makePane(wanted[0], 'primary');
+      var upper = makePane(wanted[1], 'secondary');
+      var lower = makePane(wanted[2], 'tertiary');
+      if (left) panesHost.appendChild(left);
+      if (left && (upper || lower)) panesHost.appendChild(makeDivider('column'));
+      if (upper) column.appendChild(upper);
+      if (upper && lower) column.appendChild(makeDivider('row'));
+      if (lower) column.appendChild(lower);
+      if (column.childNodes.length) panesHost.appendChild(column);
+    } else {
+      wanted.forEach(function (id, index) {
+        var pane = makePane(id, index === 0 ? 'primary' : index === 1 ? 'secondary' : 'tertiary');
+        if (!pane) return;
+        if (index > 0 && panesHost.lastElementChild) panesHost.appendChild(makeDivider('column'));
+        panesHost.appendChild(pane);
+      });
     }
 
     applyRatio();
@@ -244,9 +354,16 @@
 
   function applyRatio() {
     if (!panesHost) return;
-    var two = state.panes.length > 1;
-    panesHost.classList.toggle('is-split', two);
+    var count = state.panes.length;
+    var layout = layoutFor(count, state.threeLayout);
+    panesHost.classList.toggle('is-split', count > 1);
+    panesHost.classList.toggle('is-three', count === 3);
+    // Column ratio drives the divider between left and right. Row ratio drives the one
+    // inside the stacked column. Both are written every time so a divider being
+    // dragged and a layout switching can never leave a stale value behind.
     panesHost.style.setProperty('--split-ratio', String(state.ratio));
+    panesHost.style.setProperty('--column-ratio', String(layout === 'threeTall' ? state.columnRatio : state.ratio));
+    panesHost.style.setProperty('--row-ratio', String(state.rowRatio));
   }
 
   /* Showing a pane is the same visibility pass the rest of the app uses, so a panel
@@ -287,15 +404,31 @@
    */
   function follow(id) {
     if (!id || !panelById(id)) return;
-    if (state.panes[0] === id) return;          // already primary
-    if (state.panes[1] === id) { setPanes([id, state.panes[0]], true); return; }
-    // A different panel was opened. It becomes the primary; whatever was primary drops
-    // to a single pane again rather than being left behind as a stale shell.
-    setPanes([id]);
+    var at = state.panes.indexOf(id);
+    if (at === 0) return;                       // already primary
+    if (at > 0) {                               // already open: promote it
+      var next = state.panes.slice();
+      next.splice(at, 1);
+      next.unshift(id);
+      setPanes(next, true);
+      return;
+    }
+    /* A panel renderer.js opened that the split view did not know about. It becomes
+     * primary and joins whatever was already open, up to the cap, rather than
+     * replacing it. Replacing meant showing a panel always collapsed the layout back
+     * to a single pane, which is what made the split view feel like it kept forgetting
+     * itself. */
+    setPanes([id].concat(state.panes).slice(0, MAX_PANES), true);
   }
 
   function setPanes(next, keepRatio) {
-    state.panes = next.slice(0, 2);
+    var wanted = Array.isArray(next) ? next : [];
+    var kept = [];
+    for (var i = 0; i < wanted.length && kept.length < MAX_PANES; i++) {
+      var id = wanted[i];
+      if (id && panelById(id) && kept.indexOf(id) === -1) kept.push(id);
+    }
+    state.panes = kept;
     if (!keepRatio) state.ratio = 0.5;
     renderPanes();
     syncRail();
@@ -304,16 +437,34 @@
 
   function openPrimary(id) {
     if (state.panes[0] === id) return;
-    // Clicking the icon of a panel already open in the second slot promotes it,
-    // which is what people expect from a tab and avoids a pointless no-op.
-    if (state.panes[1] === id) { setPanes([id, state.panes[0]], true); return; }
-    setPanes([id]);
+    var at = state.panes.indexOf(id);
+    if (at > 0) {
+      var next = state.panes.slice();
+      next.splice(at, 1);
+      next.unshift(id);
+      setPanes(next, true);
+      return;
+    }
+    setPanes([id].concat(state.panes), true);
   }
 
   function splitWith(id) {
     if (!state.panes.length) { setPanes([id]); return; }
     if (state.panes.indexOf(id) > -1) { openPrimary(id); return; }
-    setPanes([state.panes[0], id], true);
+    /* A fourth panel replaces the oldest rather than reflowing. Three is the cap, and
+     * dropping the oldest is the arrangement that needs no new shape. */
+    setPanes(state.panes.concat([id]).slice(-MAX_PANES), true);
+  }
+
+  /* Toggle between the two three-pane arrangements. Only meaningful with three open,
+   * and doing nothing with fewer is deliberate: a player rearranging a two-pane split
+   * should not be surprised by the panels moving. */
+  function cycleThreeLayout() {
+    if (state.panes.length !== MAX_PANES) return false;
+    state.threeLayout = state.threeLayout === 'row' ? 'threeTall' : 'row';
+    renderPanes();
+    save();
+    return true;
   }
 
   function closePane(id) {
@@ -370,17 +521,71 @@
     highlightTarget(drag.target);
   }
 
+  /* What a release would do, decided by what is under the pointer.
+   *
+   * Dropping onto a pane puts the dragged panel in that pane's slot, so a player can
+   * move a panel between the left, top-right and bottom-right positions by dragging it
+   * onto the one it should replace. Previously every drop over the workspace was the
+   * same answer, "add it to the end", so a drag could never actually place anything and
+   * the ghost suggested otherwise. Dropping on empty workspace still appends. */
   function hitTest(x, y) {
-    var overRail = rail && rail.contains(document.elementFromPoint(x, y));
-    if (overRail) {
-      var btn = document.elementFromPoint(x, y).closest('.split-rail-btn');
+    var under = document.elementFromPoint(x, y);
+
+    if (rail && under && rail.contains(under)) {
+      var btn = under.closest ? under.closest('.split-rail-btn') : null;
       if (btn && btn.dataset.panel !== drag.id) return { kind: 'split', id: btn.dataset.panel };
       return null;
     }
-    if (workspace && workspace.contains(document.elementFromPoint(x, y))) {
-      return { kind: 'split', id: drag.id, keep: true };
+
+    if (workspace && under && workspace.contains(under)) {
+      var pane = under.closest ? under.closest('.split-pane') : null;
+      if (pane && pane.dataset.panel && pane.dataset.panel !== drag.id) {
+        return { kind: 'into', id: pane.dataset.panel, slot: pane.dataset.slot };
+      }
+      if (pane && pane.dataset.panel === drag.id) return { kind: 'keep' };
+      return { kind: 'append' };
     }
     return { kind: 'float' };
+  }
+
+  /* The outline showing where the dragged panel will land. */
+  var preview = null;
+
+  function showPreview(target) {
+    if (!target || (target.kind !== 'into' && target.kind !== 'append')) { hidePreview(); return; }
+    if (!workspace) { hidePreview(); return; }
+
+    var box;
+    if (target.kind === 'into') {
+      var pane = panesHost.querySelector('.split-pane[data-panel="' + cssEscape(target.id) + '"]');
+      box = pane ? pane.getBoundingClientRect() : null;
+    } else {
+      var host = panesHost.getBoundingClientRect();
+      box = { left: host.left, top: host.top, width: host.width, height: host.height };
+    }
+    if (!box) { hidePreview(); return; }
+
+    if (!preview) {
+      preview = document.createElement('div');
+      preview.className = 'split-drop-preview';
+      workspace.appendChild(preview);
+    }
+    preview.style.left = (box.left - workspace.getBoundingClientRect().left) + 'px';
+    preview.style.top = (box.top - workspace.getBoundingClientRect().top) + 'px';
+    preview.style.width = box.width + 'px';
+    preview.style.height = box.height + 'px';
+  }
+
+  function hidePreview() {
+    if (preview && preview.parentNode) preview.parentNode.removeChild(preview);
+    preview = null;
+  }
+
+  /* Attribute values come from the panel registry, so they are escaped rather than
+   * dropped into a selector unquoted. */
+  function cssEscape(value) {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+    return String(value).replace(/["\\]/g, '\\$&');
   }
 
   function highlightTarget(target) {
@@ -388,7 +593,14 @@
     Array.prototype.forEach.call(rail.children, function (btn) {
       btn.classList.toggle('is-drop', !!target && target.kind === 'split' && btn.dataset.panel === target.id);
     });
-    workspace.classList.toggle('is-drop', !!target && target.kind === 'split');
+    workspace.classList.toggle('is-drop', !!target && (target.kind === 'append' || target.kind === 'into'));
+    if (target && target.kind === 'into' && panesHost) {
+      var pane = panesHost.querySelector('.split-pane[data-panel="' + cssEscape(target.id) + '"]');
+      if (pane) pane.classList.add('is-drop-target');
+    }
+    Array.prototype.forEach.call(panesHost ? panesHost.querySelectorAll('.split-pane.is-drop-target') : [],
+      function (p) { if (!pane || p !== pane) p.classList.remove('is-drop-target'); });
+    showPreview(target);
   }
 
   function onRailPointerUp(e) {
@@ -405,12 +617,26 @@
     document.body.classList.remove('is-split-dragging');
     if (ghost) ghost.style.display = 'none';
     highlightTarget(null);
+    hidePreview();
 
     if (!wasActive) { openPrimary(id); return; }
     if (!target) return;
-    if (target.kind === 'split' && target.keep) return; // dropped on its own pane
-    if (target.kind === 'split') splitWith(target.id);
-    else if (dock() && typeof dock().tearOffPanel === 'function') dock().tearOffPanel(id, e.clientX, e.clientY);
+    if (target.kind === 'keep') return;                 // dropped on itself
+    if (target.kind === 'split') { splitWith(target.id); return; }
+    if (target.kind === 'into') { moveToSlot(id, target.id); return; }
+    if (target.kind === 'append') { splitWith(id); return; }
+    if (dock() && typeof dock().tearOffPanel === 'function') dock().tearOffPanel(id, e.clientX, e.clientY);
+  }
+
+  /* Put `id` in the slot currently held by `onto`, shifting what was there. The panel
+   * being dropped on is not lost, it moves: dropping Rivens onto the pane holding
+   * Resources makes Resources the second pane, not no pane. */
+  function moveToSlot(id, onto) {
+    var next = state.panes.filter(function (p) { return p !== id; });
+    var at = next.indexOf(onto);
+    if (at === -1) { setPanes(next.concat([id]), true); return; }
+    next.splice(at, 0, id);
+    setPanes(next, true);
   }
 
   /* ---------------------------------------------------------
@@ -420,8 +646,23 @@
     var divider = e.target.closest ? e.target.closest('.split-divider') : null;
     if (!divider || !workspace) return;
     e.preventDefault();
-    dividerDrag = { startX: e.clientX, startRatio: state.ratio };
-    document.body.classList.add('is-resizing-split');
+    /* Which ratio this divider owns, and along which axis, is decided from the
+     * arrangement rather than guessed. A divider inside the stacked column splits top
+     * from bottom, so dragging it sideways must do nothing, and dragging the left-hand
+     * one up and down must do nothing either. Before this there was one ratio and every
+     * divider moved it, so in a three-pane layout two dividers fought over the same
+     * number and the layout juddered. */
+    var axis = divider.dataset.axis === 'row' ? 'row' : 'column';
+    var key = axis === 'row' ? 'rowRatio' : (state.panes.length === MAX_PANES ? 'columnRatio' : 'ratio');
+    dividerDrag = {
+      axis: axis,
+      key: key,
+      startX: e.clientX,
+      startY: e.clientY,
+      startRatio: state[key]
+    };
+    document.body.classList.add('is-divider-dragging');
+    if (axis === 'row') document.body.classList.add('is-row-divider');
     divider.setPointerCapture && divider.setPointerCapture(e.pointerId);
     window.addEventListener('pointermove', onDividerPointerMove);
     window.addEventListener('pointerup', onDividerPointerUp);
@@ -431,13 +672,26 @@
   function onDividerPointerMove(e) {
     if (!dividerDrag || !workspace) return;
     var rect = workspace.getBoundingClientRect();
-    if (rect.width <= 0) return;
-    // The rail eats into the workspace, so the ratio is measured against the panes
-    // area rather than the window, otherwise the divider drifts as it is dragged.
-    var usable = rect.width - RAIL_WIDTH;
-    if (usable <= 0) return;
-    var next = (e.clientX - rect.left - RAIL_WIDTH) / usable;
-    state.ratio = Math.min(0.85, Math.max(0.15, next));
+    // The rail eats into the workspace, so a horizontal ratio is measured against the
+    // panes area rather than the window, otherwise the divider drifts as it is dragged.
+    var usableW = rect.width - RAIL_WIDTH;
+    var next;
+
+    if (dividerDrag.axis === 'row') {
+      /* Measured inside the stacked column, not the workspace, or the top pane would
+       * grow with the window instead of with the space it actually has. */
+      var column = panesHost ? panesHost.querySelector('.split-column') : null;
+      var box = column ? column.getBoundingClientRect() : rect;
+      if (box.height <= 0) return;
+      next = (e.clientY - box.top) / box.height;
+    } else {
+      if (usableW <= 0) return;
+      next = (e.clientX - rect.left - RAIL_WIDTH) / usableW;
+    }
+
+    var clamped = Math.min(0.85, Math.max(0.15, next));
+    if (clamped === state[dividerDrag.key]) return;
+    state[dividerDrag.key] = clamped;
     applyRatio();
   }
 
@@ -445,6 +699,9 @@
     window.removeEventListener('pointermove', onDividerPointerMove);
     window.removeEventListener('pointerup', onDividerPointerUp);
     window.removeEventListener('pointercancel', onDividerPointerUp);
+    document.body.classList.remove('is-divider-dragging', 'is-row-divider');
+    if (dividerDrag) save();
+    dividerDrag = null;
     if (!dividerDrag) return;
     dividerDrag = null;
     document.body.classList.remove('is-resizing-split');
@@ -494,11 +751,19 @@
     save();
   }
 
-  window.OrdisSplit = {
-    follow: follow,
-    refresh: function () { renderRail(); },
-    panes: function () { return state.panes.slice(); }
-  };
+    window.OrdisSplit = {
+      follow: follow,
+      refresh: function () { renderRail(); },
+      panes: function () { return state.panes.slice(); },
+      /* Exposed so the arrangement can be switched without a drag: with three panes open
+       * this is the only way to move between the one-left-two-right layout and the
+       * three-in-a-row one. */
+      cycleLayout: cycleThreeLayout,
+      layout: function () { return layoutFor(state.panes.length, state.threeLayout); },
+      open: splitWith,
+      primary: openPrimary,
+      close: closePane
+    };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
