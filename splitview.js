@@ -317,27 +317,72 @@
     }, 180);
   }
 
-  function nearestRailButton(clientY) {
-    if (!rail) return null;
+  /* Where each icon is, measured once and reused.
+   *
+   * getBoundingClientRect forces a synchronous layout, so calling it in a loop on every
+   * pointermove made moving the mouse across the rail recalculate the geometry of the
+   * whole document once per pixel. That is the read/write thrash that made the rail feel
+   * like it was dragging through syrup, and it was the only thing running on that path.
+   *
+   * The boxes only change when the rail is re-rendered, scrolled, or resized, so they are
+   * measured on those and read from the cache the rest of the time. The cache is dropped
+   * rather than trusted across a re-render, because a stale box sends the lens to an icon
+   * that has moved and there is no way to tell that apart from it being right. */
+  var lensBoxes = null;
+
+  function measureLensBoxes() {
+    lensBoxes = [];
+    if (!rail) return lensBoxes;
     var buttons = rail.querySelectorAll('.split-rail-btn');
-    var best = null;
-    var bestDist = Infinity;
     for (var i = 0; i < buttons.length; i++) {
       var b = buttons[i].getBoundingClientRect();
-      var d = Math.abs(clientY - (b.top + b.height / 2));
-      if (d < bestDist) { bestDist = d; best = buttons[i]; }
+      lensBoxes.push({ btn: buttons[i], top: b.top, mid: b.top + b.height / 2, bottom: b.bottom });
+    }
+    return lensBoxes;
+  }
+
+  function invalidateLensBoxes() { lensBoxes = null; }
+
+  function nearestRailButton(clientY) {
+    if (!lensBoxes) measureLensBoxes();
+    var best = null;
+    var bestDist = Infinity;
+    for (var i = 0; i < lensBoxes.length; i++) {
+      var d = Math.abs(clientY - lensBoxes[i].mid);
+      if (d < bestDist) { bestDist = d; best = lensBoxes[i].btn; }
     }
     return best;
   }
+
+  /* Pointer handling, without a frame throttle.
+   *
+   * A requestAnimationFrame version was tried and removed. Coalescing to one move per
+   * frame is correct in principle, but the pending flag is only cleared by the callback
+   * firing, and rAF does not fire for an occluded or hidden window. The lens then wedged
+   * on whichever icon it had reached and stopped following the pointer for good - worse
+   * than doing too much work, because there is no way back.
+   *
+   * The cost it was avoiding is already gone: the boxes are cached, so a move is now a
+   * handful of subtractions against measured values rather than a forced layout per
+   * pixel. That was the whole of the jank. */
+  function lensFromPointer(e) {
+    lensTo(nearestRailButton(e.clientY));
+  }
+
 
   function attachLens() {
     if (!rail || rail.dataset.lensBound === '1') return;
     rail.dataset.lensBound = '1';
     ensureLens();
+    /* Anything that moves an icon invalidates the boxes: the rail scrolling, the window
+       resizing, and fonts landing after first paint. */
+    rail.addEventListener('scroll', invalidateLensBoxes, { passive: true });
+    window.addEventListener('resize', invalidateLensBoxes);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(invalidateLensBoxes);
 
     rail.addEventListener('pointermove', function (e) {
       if (e.pointerType === 'touch') return;
-      lensTo(nearestRailButton(e.clientY));
+      lensFromPointer(e);
     });
     rail.addEventListener('pointerleave', hideLens);
     /* Keyboard focus moves the lens too, or tabbing through the rail would light nothing
@@ -352,7 +397,15 @@
   function renderRail() {
     if (!rail) return;
     rail.textContent = '';
+    /* The lens is a child of the rail, so clearing the rail destroyed it - and because
+     * attachLens is bound once, it was never put back. Any re-render left a rail that
+     * looked fine and had no magnifier, which is the kind of fault that only shows up
+     * after something unrelated has already refreshed the rail. It is taken out before
+     * the clear and put back after, rather than re-created, so its transition state
+     * survives. */
+    if (lens && lens.parentNode === rail) rail.removeChild(lens);
     panels().forEach(function (panel) {
+
       var btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'split-rail-btn';
@@ -366,7 +419,10 @@
       rail.appendChild(btn);
     });
     syncRail();
+    if (lens) rail.appendChild(lens);
+    invalidateLensBoxes();
   }
+
 
   function syncRail() {
     if (!rail) return;
@@ -576,17 +632,53 @@
     save();
   }
 
+  /* A plain click on a rail tab switches the primary panel. It does not open a pane.
+   *
+   * It used to prepend, so with one panel open every click made a second one: click
+   * through the rail and the workspace fills with panes, none of them chosen, until it
+   * hits the cap of three and starts dropping the ones you had. Adding a panel is a drag
+   * onto the workspace, and only a drag. The name says what it does; the body did not.
+   *
+   * The rest of the panes survive a switch, so losing a third one to open a fourth is not
+   * a side effect of replacing the primary - it is the cap doing its job. */
+  /* Panels that do something rather than open something.
+   *
+   * Trade mode flips a flag and has no element, so there is nothing to put in a pane and
+   * nothing to show. It is described once on the panel and both rails ask here, because
+   * the two rails have separate gesture paths and the dock's copy of this guard was never
+   * reached from the split rail - which is how a Trade button that lit up and did nothing
+   * existed. */
+  function actionPanel(id) {
+    var panel = panelById(id);
+    return panel && panel.action ? panel.action : null;
+  }
+
+  function runActionPanel(name) {
+    if (name === 'trade' && typeof window.OrdisTradeModeToggle === 'function') {
+      window.OrdisTradeModeToggle();
+    }
+  }
+
   function openPrimary(id) {
+    /* Trade mode is a switch, not a place, and it has no element to put in a pane.
+     * Handled here as well as in the dock's focus(), because the split rail has its own
+     * gesture path and never went through that function - so the rail's Trade button lit
+     * up and did nothing at all. */
+    var action = actionPanel(id);
+    if (action) { runActionPanel(action); return; }
+
     if (state.panes[0] === id) return;
     var at = state.panes.indexOf(id);
     if (at > 0) {
       var next = state.panes.slice();
       next.splice(at, 1);
       next.unshift(id);
+
       setPanes(next, true);
       return;
     }
-    setPanes([id].concat(state.panes), true);
+    setPanes([id].concat(state.panes.slice(1)), true);
+
   }
 
   function splitWith(id) {
