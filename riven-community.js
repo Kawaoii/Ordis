@@ -47,12 +47,25 @@
    actually rolled. That is the single most important thing in this file.
    --------------------------------------------------------------------------- */
 
-/* Pulled in rather than reimplemented. riven-data.js already has an RFC4180 parser
- * that handles the quoted notes field correctly, and two CSV readers drifting apart is
- * how a weapon ends up graded against the wrong column. */
-const { parseCsvRows } = require('./riven-data.js');
-const { normalizeRivenName, resolveRivenStatKey, rivenStatName, statMaxValue,
-        rivenCompositionWeight } = require('./riven-data.js');
+/* riven-data.js requires this module, and the reverse dependency is supplied rather
+ * than imported, because a require cycle between two modules that both need the other at
+ * load time gives one of them a half-initialised copy of the other. setHost is called
+ * once from riven-data.js at load, and every helper below reads through it. The same
+ * reason the CSV parser is not reimplemented here: riven-data already has an RFC4180
+ * reader that handles the quoted notes field, and two readers drifting apart is how a
+ * weapon ends up graded against the wrong column. */
+let host = null;
+
+function setHost(dependencies) {
+  host = dependencies;
+}
+
+function need() {
+  if (!host) {
+    throw new Error('riven-community: setHost() was never called, so the shared helpers are unavailable.');
+  }
+  return host;
+}
 
 const COMMUNITY_SHEET_ID = '1OQGKpWXeoPaN0Cy7mTvVZMRcwvZXgIC3EO1AIRAkwDg';
 const COMMUNITY_SHEET_URL =
@@ -63,7 +76,7 @@ const COMMUNITY_SHEET_URL =
  * rather than guessed at, so a stat nobody recognises cannot inflate a score. */
 function abbrevToKey(token) {
   if (!token) return null;
-  return resolveRivenStatKey(token);
+  return need().resolveRivenStatKey(token);
 }
 
 /**
@@ -121,7 +134,7 @@ function buildRule(row) {
  * whenever someone edits the legend.
  */
 function parseCommunitySheet(csvText) {
-  const rows = parseCsvRows(csvText);
+  const rows = need().parseCsvRows(csvText);
   if (!rows.length) throw new Error('Community good-rolls sheet was empty.');
 
   let start = -1;
@@ -148,7 +161,7 @@ function parseCommunitySheet(csvText) {
 
     if (nameCell.startsWith('[') && nameCell.endsWith(']')) {
       const name = nameCell.slice(1, -1).trim();
-      const key = normalizeRivenName(name);
+      const key = need().normalizeRivenName(name);
       if (!key) { current = null; continue; }
       current = { name, key, rules: [], notes: [] };
       weapons.set(key, current);
@@ -204,7 +217,10 @@ function selectRuleForStats(weaponEntry, stats) {
       if (rule.best === key) { score += 10; mentioned.add(key); }
       else if (rule.second === key) { score += 6; mentioned.add(key); }
       else if (rule.positiveTiers.some((tier) => tier.indexOf(key) !== -1)) { score += 3; mentioned.add(key); }
-      else if (rule.negativeTiers.some((tier) => tier.indexOf(key) !== -1)) { score += 3; mentioned.add(key); }
+      // A negative tier is deliberately not counted here. It says what the sheet
+      // considers a good penalty, not that the riven is built that way, and counting it
+      // let a Zaw riven whose only stat was impact be matched to the rule that lists
+      // impact as a penalty, then graded as though impact were its best stat.
     }
     const coverage = keys.size ? mentioned.size / keys.size : 0;
     // Coverage dominates, because it is what identifies the rule. Rank quality only
@@ -213,9 +229,16 @@ function selectRuleForStats(weaponEntry, stats) {
     if (combined > bestScore) { bestScore = combined; bestCoverage = coverage; best = rule; }
   }
 
-  // A rule that explains at least half the riven is a description. One that explains
-  // less is a guess, and guessing which build someone is running is how a good riven
-  // gets called bad.
+  /* How much of a riven a rule has to account for before it is a description of it
+   * rather than a coincidence.
+   *
+   * This threshold is the difference between reporting the truth and inventing it. A
+   * Phenmor with electricity, punch through and projectile speed matches neither of the
+   * sheet's two Phenmor rules, both of which want multishot or crit chance, and it is
+   * refused: the community has no opinion about that riven, so neither have we. Loosening
+   * it to grade everything "graded 97 of 125" bought 22 answers, and 22 of them were a
+   * confident letter against a rule that does not describe the riven. A riven this tool
+   * cannot judge should say so. */
   return best && bestCoverage >= 0.5 ? best : null;
 }
 
@@ -271,12 +294,32 @@ function gradeWithCommunityData(weaponEntry, stats, options) {
     };
   }
 
+  /* A riven whose positives the sheet ranks nowhere has no verdict, and saying so is
+   * the answer. Grading it produced the worst possible result: a Zaw riven with one
+   * impact stat was written "imp" and scored 0, which reads as the worst riven you
+   * own rather than as one this tool cannot judge. */
+  const positivesPresent = list.filter((s) => s.isPositive);
+  const anyRanked = positivesPresent.some((s) => positiveRank(rule, s.key) !== -1);
+  if (!anyRanked) {
+    return {
+      graded: false,
+      reason: 'no-ranked-positives',
+      source: 'community',
+      weaponClass: opts.weaponClass || '',
+      notation: '',
+      score: null,
+      positiveRanks: [],
+      negativeRanks: [],
+      notes: (weaponEntry && weaponEntry.notes) || []
+    };
+  }
+
   const positives = list.filter((s) => s.isPositive);
   const negatives = list.filter((s) => !s.isPositive);
 
   const positiveRanks = positives.map((s) => ({
     key: s.key,
-    name: rivenStatName(s.key) || s.name,
+    name: need().rivenStatName(s.key) || s.name,
     value: s.value,
     rank: positiveRank(rule, s.key)
   })).sort((a, b) => {
@@ -289,7 +332,7 @@ function gradeWithCommunityData(weaponEntry, stats, options) {
 
   const negativeRanks = negatives.map((s) => ({
     key: s.key,
-    name: rivenStatName(s.key) || s.name,
+    name: need().rivenStatName(s.key) || s.name,
     value: s.value,
     rank: negativeRank(rule, s.key)
   })).sort((a, b) => {
@@ -379,14 +422,14 @@ function gradeWithCommunityData(weaponEntry, stats, options) {
    * rolled-to-nothing one scored identically. Quality is skipped entirely when the
    * ceiling is unknown rather than assumed full, so a riven on a weapon with no
    * disposition is scored on rank alone instead of on a fabricated number. */
-  const composition = rivenCompositionWeight(positives.length, negatives.length);
+  const composition = need().rivenCompositionWeight(positives.length, negatives.length);
   const canMeasure = Boolean(opts.weaponClass) && Boolean(opts.disposition) && Boolean(composition);
   let qualityPoints = 0;
   let qualityPossible = 0;
   for (const p of positiveRanks) {
     if (!canMeasure) break;
     const weight = composition && composition.bonus ? composition.bonus : null;
-    const max = statMaxValue(p.key, opts.weaponClass, opts.disposition, weight);
+    const max = need().statMaxValue(p.key, opts.weaponClass, opts.disposition, weight);
     if (max == null || !isFinite(max) || max <= 0) continue;
     // A good roll is most of the ceiling. Perfectness is measured against the best
     // possible roll, so 0.5 of the maximum is a middling roll and 1.0 is the best there
@@ -463,6 +506,7 @@ function scoreBandLabel(score) {
 }
 
 module.exports = {
+  setHost,
   COMMUNITY_SHEET_ID,
   COMMUNITY_SHEET_URL,
   parseCommunitySheet,

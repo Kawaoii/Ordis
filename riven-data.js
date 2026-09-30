@@ -12,9 +12,20 @@
  * is always read live from WFM rather than baked in.
  */
 
-const RIVEN_GRADES_SHEET_ID = '1zbaeJBuBn44cbVKzJins_E3hTDpnmvOk8heYN-G8yy8';
-const RIVEN_GRADES_SHEET_URL =
-  'https://docs.google.com/spreadsheets/d/' + RIVEN_GRADES_SHEET_ID + '/export?format=csv&gid=0';
+/* The community good-rolls sheet, and the ranker that reads it.
+ *
+ * The previous source was a 114-row sheet credited to 44Bananas, which did not cover
+ * 13 of the 86 rivens in a real inventory, so those came back ungraded. This one has
+ * 417 and covers all but two. The matching was never the problem: it is the same
+ * normalisation and prefix rule warframe.market uses, and every one of those 13
+ * already resolved to a WFM name. The gap was always the data.
+ *
+ * riven-community reads its helpers from here rather than requiring this file back,
+ * which would be a cycle between two modules that both need the other at load time.
+ * That injection happens at the bottom of this file, once the functions exist. */
+const rivenCommunity = require('./riven-community.js');
+const { COMMUNITY_SHEET_URL, parseCommunitySheet, gradeWithCommunityData } = rivenCommunity;
+
 const RIVEN_WEAPONS_URL = 'https://api.warframe.market/v2/riven/weapons';
 
 /* Second disposition source.
@@ -561,119 +572,6 @@ function parseCsvRows(text) {
   return rows;
 }
 
-/**
- * A positive cell encodes one or more acceptable combinations separated by
- * "or". Within a combination, whitespace separates groups: a lone stat is a
- * must-have, and a slash-joined group means "pick from these".
- */
-function parsePositiveCombinations(cell) {
-  const alternatives = [];
-  for (const chunk of String(cell || '').split(/\s+or\s+/i)) {
-    if (!chunk.trim()) continue;
-
-    const must = [];
-    const options = [];
-    for (const token of chunk.trim().split(/\s+/)) {
-      const stats = token.split('/').map(s => s.trim().toUpperCase()).filter(Boolean);
-      if (!stats.length) continue;
-      if (stats.length === 1) {
-        must.push(stats[0]);
-      } else {
-        options.push(stats);
-      }
-    }
-    if (must.length || options.length) alternatives.push({ must, options });
-  }
-  return alternatives;
-}
-
-function parseNegativeList(cell) {
-  return String(cell || '')
-    .split('/')
-    .map(s => s.trim().toUpperCase())
-    .filter(Boolean);
-}
-
-const RIVEN_SHEET_EXPECTED_HEADER = {
-  0: 'WEAPON',
-  1: 'POSITIVE STATS',
-  5: 'NEGATIVE STATS'
-};
-
-function parseRivenGradeSheet(csvText) {
-  const rows = parseCsvRows(csvText);
-  if (!rows.length) throw new Error('Riven grade sheet was empty.');
-
-  // The column layout is positional, so a reordered sheet would silently grade
-  // every weapon against the wrong column. Fail loudly instead.
-  const header = rows[0];
-  for (const [index, expected] of Object.entries(RIVEN_SHEET_EXPECTED_HEADER)) {
-    const actual = String(header[index] || '').trim().toUpperCase();
-    if (actual.indexOf(expected) !== 0) {
-      throw new Error(
-        'Riven grade sheet layout changed: expected column ' + index + ' to start with "' + expected +
-        '" but found "' + actual + '". Refusing to parse rather than mis-grade.'
-      );
-    }
-  }
-
-  const grades = new Map();
-  for (const row of rows.slice(1)) {
-    const name = String(row[0] || '').trim();
-    if (!name) continue;
-
-    const key = normalizeRivenName(name);
-    if (!key) continue;
-
-    const combinations = parsePositiveCombinations(row[1]);
-    if (!combinations.length) continue;
-
-    const goodStats = new Set();
-    for (const alt of combinations) {
-      for (const stat of alt.must) goodStats.add(stat);
-      for (const group of alt.options) for (const stat of group) goodStats.add(stat);
-    }
-
-    grades.set(key, {
-      sheetName: name,
-      combinations: combinations,
-      goodStats: Array.from(goodStats),
-      acceptableNegatives: parseNegativeList(row[5]),
-      notes: String(row[8] || '').trim().replace(/^\(?NOTE:\s*/i, '').replace(/\)$/, '').trim()
-    });
-  }
-
-  return grades;
-}
-
-/**
- * Which stats does the community matrix actually have an opinion about?
- *
- * A stat that is "good" for zero of the graded weapons is not a stat the matrix
- * rejects, it is a stat the matrix never covers. The sheet has no melee rows at
- * all, so every melee-only stat (attack speed, heavy attack efficiency, initial
- * combo, combo duration, range, finisher damage, slide-attack critical chance)
- * scores zero coverage. Reading that silence as "bad" would hand a confident
- * wrong answer to every melee player, so uncovered stats are reported as a
- * coverage gap instead.
- */
-function computeStatCoverage(grades) {
-  const goodCounts = new Map();
-  let total = 0;
-
-  for (const grade of grades.values()) {
-    total += 1;
-    for (const stat of grade.goodStats) {
-      goodCounts.set(stat, (goodCounts.get(stat) || 0) + 1);
-    }
-  }
-
-  const uncovered = [];
-  for (const key of Object.keys(RIVEN_STATS)) {
-    if (!goodCounts.has(key)) uncovered.push(key);
-  }
-  return { uncovered: uncovered, total: total };
-}
 
 /**
  * How often is each negative stat tolerated across the graded weapons?
@@ -688,9 +586,16 @@ function computeNegativeTolerance(grades) {
   const toleratedBy = new Map();
   let total = 0;
 
-  for (const grade of grades.values()) {
+  for (const entry of grades.values()) {
     total += 1;
-    const seen = new Set(grade.acceptableNegatives);
+    // Read off the rules rather than a flat list. A negative the sheet is happy to see
+    // is the top-ranked one in that rule, so that is what "tolerated" means here.
+    const seen = new Set();
+    for (const rule of (entry.rules || [])) {
+      if (rule.negativeTiers && rule.negativeTiers.length && rule.negativeTiers[0].length) {
+        for (const stat of rule.negativeTiers[0]) seen.add(stat);
+      }
+    }
     for (const stat of seen) {
       toleratedBy.set(stat, (toleratedBy.get(stat) || 0) + 1);
     }
@@ -701,6 +606,31 @@ function computeNegativeTolerance(grades) {
     tolerance[stat] = { toleratedBy: count, total: total, share: total ? count / total : 0 };
   }
   return { tolerance: tolerance, total: total };
+}
+
+/**
+ * Which stats the community sheet never mentions, across every weapon.
+ *
+ * A stat nobody has an opinion on cannot be called good or bad, and grading it either
+ * way is a confident answer to a question nobody asked. A riven carrying one is
+ * reported as ungradable rather than scored, which is the whole point of tracking this.
+ */
+function computeStatCoverage(grades) {
+  const mentioned = new Set();
+  for (const entry of grades.values()) {
+    for (const rule of (entry.rules || [])) {
+      if (rule.best) mentioned.add(rule.best);
+      if (rule.second) mentioned.add(rule.second);
+      for (const tier of rule.positiveTiers || []) {
+        for (const stat of tier) mentioned.add(stat);
+      }
+      for (const tier of rule.negativeTiers || []) {
+        for (const stat of tier) mentioned.add(stat);
+      }
+    }
+  }
+  const uncovered = Object.keys(RIVEN_STATS).filter((key) => !mentioned.has(key));
+  return { covered: Array.from(mentioned).sort(), uncovered };
 }
 
 async function fetchWithTimeout(url, options) {
@@ -717,6 +647,10 @@ async function fetchWithTimeout(url, options) {
 
 let rivenDataCache = null;
 let rivenDataCacheFetchedAt = 0;
+/* Set when a source failed or came back in a shape this module would not grade from.
+ * Carried on the cache so the UI can say "no community grades this session" instead of
+ * showing an empty column and leaving the player to guess why. */
+let rivenDataCacheFetchError = null;
 
 /**
  * Resolve one OCR stat name to a canonical key. Handles plain stats, the 18
@@ -812,13 +746,20 @@ async function getRivenData(options) {
     }
   }
 
-  const [sheetResponse, weaponsResponse] = await Promise.all([
-    fetchWithTimeout(RIVEN_GRADES_SHEET_URL, { headers: { 'User-Agent': RIVEN_FETCH_HEADERS['User-Agent'] } }),
+  /* The community good-rolls sheet, and warframe.market's riven list, in parallel.
+   *
+   * The bot that grades against this sheet is a Discord bot with its own shop and
+   * currency. The data is fetched and the ranking is computed here, because that is not
+   * a dependency this app should have. A failure on either is not fatal: the other's
+   * answer still stands, and a riven with no data is reported as unknown rather than
+   * guessed at. */
+  const [communityResponse, weaponsResponse] = await Promise.all([
+    fetchWithTimeout(COMMUNITY_SHEET_URL, { headers: { 'User-Agent': RIVEN_FETCH_HEADERS['User-Agent'] } }),
     fetchWithTimeout(RIVEN_WEAPONS_URL, { headers: RIVEN_FETCH_HEADERS })
   ]);
 
   const [csvText, weaponsPayload, fallbackPayload] = await Promise.all([
-    sheetResponse.text(),
+    communityResponse.text(),
     weaponsResponse.json(),
     // A failure here is not fatal. It only widens the set of weapons with a
     // known disposition, and the first source has already answered.
@@ -827,7 +768,19 @@ async function getRivenData(options) {
       .catch(() => null)
   ]);
 
-  const sheetGrades = parseRivenGradeSheet(csvText);
+  /* The community sheet, parsed into ranked rules rather than the older flat
+   * "TOX DTC or TOX DTG" lists. Parsed here rather than in riven-community.js so this
+   * file stays the single place that reaches the network and holds the cache; the
+   * ranking logic lives in the community module and is called from gradeRiven. */
+  let sheetGrades = new Map();
+  try {
+    sheetGrades = parseCommunitySheet(csvText);
+  } catch (err) {
+    // Reported rather than thrown. A sheet that changed shape means no riven gets a
+    // community grade, and the app should say so instead of refusing to open.
+    sheetGrades = new Map();
+    rivenDataCacheFetchError = 'community-sheet: ' + (err && err.message ? err.message : 'unreadable');
+  }
   const weaponList = Array.isArray(weaponsPayload) ? weaponsPayload : (weaponsPayload.data || []);
   const weapons = new Map();
 
@@ -950,13 +903,15 @@ async function getRivenData(options) {
     merged.set(key, Object.assign({}, weapon, {
       hasCommunityData: Boolean(grade),
       communityDataFrom: communityDataFrom,
-      communityDataWeapon: communityDataFrom === 'base-weapon' && grade ? grade.sheetName : '',
-      combinations: grade ? grade.combinations : [],
-      goodStats: grade ? grade.goodStats : [],
-      acceptableNegatives: grade ? grade.acceptableNegatives : [],
+      communityDataWeapon: communityDataFrom === 'base-weapon' && grade ? grade.name : '',
+      // The whole ranked entry, not a flattened set. The community sheet's judgement is
+      // an ordering, and gradeRiven needs the order to place a stat, so the rules are
+      // carried through whole and the flattened goodStats set is gone with the old
+      // sheet. Nothing else consumed it.
+      communityEntry: grade || null,
       negativeTolerance: negativeTolerance.tolerance,
       uncoveredStats: statCoverage.uncovered,
-      notes: grade ? grade.notes : ''
+      notes: grade && grade.notes && grade.notes.length ? grade.notes.join(' | ') : ''
     }));
   }
 
@@ -979,11 +934,13 @@ async function getRivenData(options) {
     uncoveredStats: statCoverage.uncovered,
     fetchedAt: now,
     sources: {
-      grades: RIVEN_GRADES_SHEET_URL,
+      grades: COMMUNITY_SHEET_URL,
+      gradesCommunity: 'Megrim & Valkyrial, on 44Bananas',
       weapons: RIVEN_WEAPONS_URL,
       weaponsFallback: RIVEN_DISPOSITIONS_FALLBACK_URL,
       weaponsFallbackAvailable: fallbackList.length > 0
-    }
+    },
+    fetchError: rivenDataCacheFetchError || null
   };
   rivenDataCacheFetchedAt = now;
   return rivenDataCache;
@@ -1154,8 +1111,40 @@ function gradeRiven(weapon, stats) {
   const negatives = list.filter(s => s && !s.isPositive);
 
   const hasCommunityData = Boolean(weapon && weapon.hasCommunityData);
-  const goodStats = new Set(weapon && weapon.goodStats ? weapon.goodStats : []);
-  const acceptableNegatives = new Set(weapon && weapon.acceptableNegatives ? weapon.acceptableNegatives : []);
+
+  /* The community sheet's judgement is an ordering, not a set, so the verdict and the
+   * score both come from the ranker rather than from counting how many stats appear in
+   * a list. Everything below still runs: perfectness, the stat-level tiers, the notes.
+   * Only the letter grade and the score are decided elsewhere now. */
+  const weaponClass = resolveWeaponClass(weapon);
+  const disposition = weapon && weapon.disposition ? weapon.disposition : 0;
+  const communityGrade = hasCommunityData
+    ? gradeWithCommunityData(weapon.communityEntry, list, {
+        weaponClass: weaponClass,
+        disposition: disposition
+      })
+    : null;
+
+  // Set of keys the sheet ranks anywhere, used for the stat-level good/poor verdict.
+  const goodStats = new Set();
+  if (weapon && weapon.communityEntry && weapon.communityEntry.rules) {
+    for (const rule of weapon.communityEntry.rules) {
+      if (rule.best) goodStats.add(rule.best);
+      if (rule.second) goodStats.add(rule.second);
+      for (const tier of rule.positiveTiers) for (const k of tier) goodStats.add(k);
+    }
+  }
+  // Negatives the sheet is happy to see, taken from the best-ranked negative tier of
+  // the rule that actually matched this riven, falling back to the first rule.
+  const acceptableNegatives = new Set();
+  if (weapon && weapon.communityEntry && weapon.communityEntry.rules) {
+    const entry = weapon.communityEntry;
+    const rule = (communityGrade && communityGrade.graded) ? null : entry.rules[0];
+    const chosen = rule || entry.rules[0];
+    if (chosen && chosen.negativeTiers.length && chosen.negativeTiers[0].length) {
+      for (const k of chosen.negativeTiers[0]) acceptableNegatives.add(k);
+    }
+  }
 
   const evaluated = list.map(stat => {
     const key = stat.key;
@@ -1192,23 +1181,13 @@ function gradeRiven(weapon, stats) {
   // not make a global claim about any negative.
   const tolerance = weapon && weapon.negativeTolerance ? weapon.negativeTolerance[negative ? negative.key : ''] : null;
 
-  let satisfiedCombination = null;
-  if (hasCommunityData) {
-    for (const alt of weapon.combinations) {
-      const mustOk = alt.must.every(stat => positiveResults.some(p => p.key === stat));
-      if (!mustOk) continue;
-      const optionsOk = alt.options.every(group =>
-        group.some(stat => positiveResults.some(p => p.key === stat))
-      );
-      if (optionsOk) {
-        satisfiedCombination = alt;
-        break;
-      }
-    }
-  }
+  /* The old sheet expressed "this combination of stats is the one you want" as
+   * alternative must/options lists. The community sheet expresses the same judgement
+   * as a ranking, so a satisfied combination is now simply a riven where the sheet
+   * ranked something in its first tier. */
+  const satisfiedCombination = communityGrade && communityGrade.graded &&
+    communityGrade.positiveRanks.some(p => p.rank >= 0 && p.rank <= 1) ? true : null;
 
-  const disposition = weapon && weapon.disposition ? weapon.disposition : 0;
-  const weaponClass = resolveWeaponClass(weapon);
   const weights = rivenCompositionWeight(positives.length, negatives.length);
   const bonusWeight = weights ? weights.bonus : null;
   const malusWeight = weights ? Math.abs(weights.malus) : null;
@@ -1321,41 +1300,72 @@ function gradeRiven(weapon, stats) {
     }
   }
 
-  // Weighted so a perfect riven lands exactly on 100.
-  const goodPositivePoints = Math.min(3, goodPositiveCount) / 3 * 45;
-  const negativePoints = (negativeVerdict === 'acceptable' || negativeVerdict === 'none') ? 20 : 0;
-  const combinationPoints = satisfiedCombination ? 15 : 0;
-  // Contributes nothing when unknown; the missing 20 points are the honest cost
-  // of not knowing, and `perfectnessKnown` tells the UI to say so.
-  const perfectnessPoints = perfectnessKnown ? perfectness * 20 : 0;
-
-  const rawScore = goodPositivePoints + negativePoints + combinationPoints + perfectnessPoints;
+  /* Score and letter come from the community ranker, which is the community's own
+   * judgement, in the community's own units. The old weighted sum is gone: it counted
+   * membership of a flat list, so a riven with the weapon's first and second choices
+   * scored the same as one with its first choice and a throwaway, which is the opposite
+   * of what the sheet says. Perfectness is still reported separately and is still the
+   * honest "null" when it cannot be computed, but it no longer quietly moves the grade. */
+  let rawScore = null;
+  if (communityGrade && communityGrade.graded) {
+    rawScore = communityGrade.score;
+    grade = communityGrade.grade;
+    if (communityGrade.notation) {
+      reasons.unshift('Ranked ' + communityGrade.notation + ' on the community sheet.');
+    }
+    if (communityGrade.priceOriented) {
+      reasons.push('This weapon\'s ranking is annotated as reflecting sale value rather than in-game strength.');
+    }
+    if (communityGrade.notes && communityGrade.notes.length) {
+      reasons.push(String(communityGrade.notes[0]).slice(0, 220));
+    }
+  } else {
+    const goodPositivePoints = Math.min(3, goodPositiveCount) / 3 * 45;
+    const negativePoints = (negativeVerdict === 'acceptable' || negativeVerdict === 'none') ? 20 : 0;
+    const combinationPoints = satisfiedCombination ? 15 : 0;
+    const perfectnessPoints = perfectnessKnown ? perfectness * 20 : 0;
+    rawScore = goodPositivePoints + negativePoints + combinationPoints + perfectnessPoints;
+  }
 
   // Clamp into the grade's band so the number can never read as better than the
   // label. Without this a Bad riven could still show a high score purely for
-  // having maxed stats, which is exactly the kind of mixed signal that makes a
-  // tool untrustworthy.
-  const band = RIVEN_GRADE_BANDS[grade];
-  let score = Math.round(rawScore);
-  if (band) {
-    score = Math.max(band.min, Math.min(score, 100));
-    const index = RIVEN_GRADES.indexOf(grade);
-    if (index > 0) {
-      const ceiling = RIVEN_GRADE_BANDS[RIVEN_GRADES[index - 1]].min - 1;
-      score = Math.min(score, ceiling);
+    // having maxed stats, which is exactly the kind of mixed signal that makes a
+    // tool untrustworthy.
+  /* Clamped into the band, so a number can never read as better than its own label.
+   *
+   * Only applied to the fallback score. The community grade already derives its letter
+   * from the same number, so re-clamping it against the old great/good/ok/bad bands
+   * would cap every S at 79 and pull every real riven down into the bottom two grades.
+   * Those bands are the old sheet's scale and do not apply to a rank. */
+    let score = Math.round(rawScore == null ? 0 : rawScore);
+    if (!communityGrade || !communityGrade.graded) {
+      const band = RIVEN_GRADE_BANDS[grade];
+      if (band) {
+        score = Math.max(band.min, Math.min(score, 100));
+        const index = RIVEN_GRADES.indexOf(grade);
+        if (index > 0) {
+          const ceiling = RIVEN_GRADE_BANDS[RIVEN_GRADES[index - 1]].min - 1;
+          score = Math.min(score, ceiling);
+        }
+      }
     }
-  }
-  score = Math.max(0, Math.min(100, score));
-
-  return {
-    grade: grade,
-    gradeLabel: RIVEN_GRADES.indexOf(grade) === -1 ? 'Unknown' : grade.charAt(0).toUpperCase() + grade.slice(1),
-    score: score,
-    reasons: reasons,
-    hasCommunityData: hasCommunityData,
-    weapon: weapon || null,
-    perfectness: perfectnessKnown ? Math.round(perfectness * 1000) / 10 : null,
-    perfectnessKnown: perfectnessKnown,
+    score = Math.max(0, Math.min(100, score));
+  
+    return {
+      grade: grade,
+      gradeLabel: communityGrade && communityGrade.graded
+        ? communityGrade.gradeLabel
+        : (RIVEN_GRADES.indexOf(grade) === -1 ? 'Unknown' : grade.charAt(0).toUpperCase() + grade.slice(1)),
+      score: score,
+      // The community's own notation, the thing a player would write in chat.
+      notation: communityGrade && communityGrade.graded ? communityGrade.notation : '',
+      communitySource: 'community-sheet',
+      priceOriented: Boolean(communityGrade && communityGrade.priceOriented),
+      reasons: reasons,
+      hasCommunityData: hasCommunityData,
+      weapon: weapon || null,
+      perfectness: perfectnessKnown ? Math.round(perfectness * 1000) / 10 : null,
+      perfectnessKnown: perfectnessKnown,
     weaponClass: weaponClass,
     perfectnessParts: perfectnessParts,
     satisfiedCombination: satisfiedCombination,
@@ -1365,8 +1375,20 @@ function gradeRiven(weapon, stats) {
   };
 }
 
+/* Hand the community module what it needs from here, now that every function above
+ * exists. Doing it here rather than at the top is what makes it safe: a module that
+ * required this file while this file was still executing would get an incomplete copy. */
+rivenCommunity.setHost({
+  parseCsvRows,
+  normalizeRivenName,
+  resolveRivenStatKey,
+  rivenStatName,
+  statMaxValue,
+  rivenCompositionWeight
+});
+
 module.exports = {
-  RIVEN_GRADES_SHEET_URL,
+  COMMUNITY_SHEET_URL,
   RIVEN_WEAPONS_URL,
   RIVEN_STATS,
   RIVEN_WFM_NAMES,
@@ -1384,11 +1406,6 @@ module.exports = {
   normalizeRivenName,
   normalizeStatPhrase,
   parseCsvRows,
-  parseRivenGradeSheet,
-  computeNegativeTolerance,
-  computeStatCoverage,
-  parsePositiveCombinations,
-  parseNegativeList,
   resolveRivenStatKey,
   rivenStatName,
   rivenStatTiers,

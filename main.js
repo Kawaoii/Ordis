@@ -434,6 +434,16 @@ function normalizeRivenInventoryEntry(raw) {
     wfmSubtype: String(raw.wfmSubtype || '').trim(),
     listedPrice: Number.isFinite(Number(raw.listedPrice)) ? Number(raw.listedPrice) : null,
     wfmOrderId: String(raw.wfmOrderId || '').trim(),
+    /* The community's own notation, "1cc 2cd 3ms -4z", which is what a player would
+     * write about this riven and the only form the grade sheet is actually expressed
+     * in. Computed by gradeRiven and then thrown away, because everything this
+     * function kept was either in the grade object or a top-level field it happened to
+     * remember. The rank is the answer; a letter on its own throws it away. */
+    notation: String(raw.notation || '').trim(),
+    /* True when the sheet annotates this weapon's ranking as being about sale value
+     * rather than in-game strength. Shown in the row so a good grade is not read as
+     * meaning the riven is strong in a build. */
+    priceOriented: !!raw.priceOriented,
     createdAt: Number.isFinite(Number(raw.createdAt)) ? Number(raw.createdAt) : Date.now()
   };
 }
@@ -1975,7 +1985,12 @@ async function scanRivensFromMemory(options) {
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
       '-Out', outFile,
       '-Cache', cacheFile,
-      '-MaxSeconds', String(settings.maxSeconds || 90)
+      '-MaxSeconds', String(settings.maxSeconds || 90),
+      // The reader's own default of 60 is a safety stop for a cold walk, and it was
+      // silently truncating a real collection: a player with 86 rivens got 64 and no
+      // indication that anything was missing. Generous enough that a full collection
+      // finishes on its own, with the time budget as the real limit.
+      '-StopAfter', String(settings.stopAfter || 600)
     ];
     if (settings.rebuild) args.push('-RebuildCache');
     const run = await execFileAsync('powershell', args, RIVEN_MEMORY_TIMEOUT_MS);
@@ -2033,10 +2048,28 @@ async function scanRivensFromMemory(options) {
         rivenType: parsed.weaponClass || '',
         warnings: parsed.warnings || []
       };
-      // Two different riven names on one weapon, as in a Phenmor Conci-Vexinok and a
-      // Phenmor Cronitox, are genuinely two rivens and must both survive. Only copies
-      // of the same riven name get collapsed, so the key includes it.
-      const key = (entry.weaponName || '?') + '|' + (entry.weaponNameCandidates[1] || '');
+      /* Two different riven names on one weapon, a Phenmor Conci-Vexinok and a Phenmor
+       * Cronitox, are genuinely two rivens and both have to survive. So the riven name
+       * is part of the key, taken from the full candidate rather than the bare weapon
+       * name, which is the only field that carries it.
+       *
+       * The candidate has to be matched to the same weapon this entry resolved to, or
+       * two different weapons produce the same second candidate and collapse into one
+       * riven. That is what dropped a second Penta and a second Stahlta from the list. */
+      const full = entry.weaponNameCandidates.find((c) =>
+        String(c).toLowerCase().indexOf(String(entry.weaponName || '').toLowerCase()) === 0) || '';
+      const rivenName = full
+        ? String(full).slice(String(entry.weaponName || '').length).replace(/^[\s-]+/, '')
+        : '';
+      /* Stats are part of the key, not just the name.
+       *
+       * Two riven names on one weapon is two rivens and both survive, but two copies of
+       * the same riven are the same riven, and keying on the name alone left pairs of
+       * rows with identical stats and an identical score sitting in the list. The
+       * fingerprint is what actually distinguishes them, so it is the key. */
+      const key = String(entry.weaponName || '?').toLowerCase() + '|' +
+        rivenName.toLowerCase() + '|' +
+        entry.stats.map((s) => (s.isPositive ? '+' : '-') + s.key + ':' + s.value).sort().join(',');
       const total = entry.stats.reduce((sum, s) => sum + Math.abs(s.value), 0);
       const held = byWeapon.get(key);
       if (!held || total > held.total) byWeapon.set(key, { total, entry });
@@ -4305,6 +4338,10 @@ ipcMain.handle('riven-inventory-regrade', async () => {
       entry.disposition = weapon.disposition != null ? weapon.disposition : entry.disposition;
       entry.reqMasteryRank = weapon.reqMasteryRank != null ? weapon.reqMasteryRank : entry.reqMasteryRank;
       entry.reasons = Array.isArray(grade.reasons) ? grade.reasons.slice(0, 5) : [];
+      // Carried onto the row so it survives the save. The grade is the community's
+      // ranking expressed as a letter, and the letter throws the ranking away.
+      entry.notation = grade.notation || '';
+      entry.priceOriented = !!grade.priceOriented;
       updated += 1;
     } catch (err) {
       failed += 1;
