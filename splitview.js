@@ -208,7 +208,145 @@
     app.appendChild(ghost);
 
     renderRail();
+    attachLens();
+    attachIconFallbacks();
     return true;
+  }
+
+  /* The rail and the dock strip are two renderings of one panel list, and this is the
+   * icon field they disagree on.
+   *
+   * The strip accepts a ligature, an image path, or drawn markup, told apart by the first
+   * character. This one did not: it dropped panel.icon straight into innerHTML, so a drawn
+   * icon arrived as its own source text and an image path arrived as the words
+   * "assets/void-trace.png" on a button. Both are in the list now, so the rail rendered
+   * the Rivens and Mods tabs as source code.
+   *
+   * A failed image is swapped for the panel's glyph from a delegated listener, because an
+   * inline onerror attribute cannot be written here without it breaking on the nested
+   * quotes - and when it did break, the two panels whose art is not in the repo yet simply
+   * rendered an empty 0x0 box. An absent file is a normal state, not an error: the art is
+   * optional, and the rail has to read the same with or without it. */
+  function railIconMarkup(panel) {
+    var icon = panel && panel.icon;
+    if (!icon) return '';
+    if (icon.charAt(0) === '<') return icon;
+    if (/\.(png|webp|svg|jpe?g)$/i.test(icon)) {
+      return '<img class="dock-tab-art" src="' + icon + '" alt="" aria-hidden="true" ' +
+        'data-fallback-icon="' + (panel.fallbackIcon || 'category') + '">';
+    }
+    return icon;
+  }
+
+  function attachIconFallbacks() {
+    if (!rail || rail.dataset.iconFallbackBound === '1') return;
+    rail.dataset.iconFallbackBound = '1';
+    /* Capture phase: error does not bubble, so a listener on the rail only ever hears its
+     * own failures unless it is registered for capture. */
+    rail.addEventListener('error', function (e) {
+      var img = e.target;
+      if (!img || img.tagName !== 'IMG') return;
+      var glyph = document.createElement('span');
+      glyph.className = 'material-icons-round';
+      glyph.textContent = img.dataset.fallbackIcon || 'category';
+      if (img.parentNode) img.parentNode.replaceChild(glyph, img);
+    }, true);
+  }
+
+  /* The lens: one circle that rides the rail and magnifies the icon under the cursor.
+   *
+   * It is a single element moved with a transform, not a circle per button. With one per
+   * button, the boundary between two neighbours is a moment where two of them each think
+   * they are the hovered one, and the effect stutters exactly where the eye is tracking
+   * it. One lens has one position and no boundary to disagree about.
+   *
+   * Position is read from the button's own box rather than from the pointer, so the lens
+   * snaps to whole icons. Following the raw pointer position put the lens between two
+   * icons, magnifying the gap. */
+  var lens = null;
+  var lensHideTimer = null;
+
+  function ensureLens() {
+    if (lens || !rail) return lens;
+    lens = document.createElement('div');
+    lens.className = 'split-rail-lens';
+    lens.setAttribute('aria-hidden', 'true');
+    rail.appendChild(lens);
+    return lens;
+  }
+
+  function lensTo(btn) {
+    if (!btn || !rail) return;
+    ensureLens();
+    var btnBox = btn.getBoundingClientRect();
+    var railBox = rail.getBoundingClientRect();
+    /* Rail-relative, because the lens is absolutely positioned inside the rail and not in
+     * the viewport. The first version of this read railBox.top + btnBox.top - railBox.top,
+     * which cancels down to btnBox.top - a viewport coordinate fed to a rail-relative
+     * transform, which put the lens one button low for every icon. Subtracting the rail's
+     * own offset is the whole of the fix.
+     *
+     * The centre of the icon, not the gap after it: the lens is wider than a button, so
+     * centring it between two icons would magnify the space between them. */
+    var y = btnBox.top - railBox.top + btnBox.height / 2;
+    lens.style.transform = 'translate3d(0,' + y.toFixed(1) + 'px,0)';
+    rail.classList.add('has-lens');
+
+    /* Tag the one icon the lens is over.
+     *
+     * The magnification used to hang off the rail having a lens at all, which matched
+     * every button in the column: thirteen icons grew together and the effect read as
+     * "bigger icons" rather than as a magnifier. The lens has to name its own icon, so
+     * the class moves with it and the previous holder is cleared - otherwise the icon
+     * left behind stays swollen when the lens moves on. */
+    var previous = rail.querySelector('.split-rail-btn.is-lensed');
+    if (previous && previous !== btn) previous.classList.remove('is-lensed');
+    btn.classList.add('is-lensed');
+  }
+
+  function hideLens() {
+    if (!rail) return;
+    rail.classList.remove('has-lens');
+    var lensed = rail.querySelector('.split-rail-btn.is-lensed');
+    if (lensed) lensed.classList.remove('is-lensed');
+    /* Held briefly on the way out, or the lens vanishes the instant the pointer crosses
+     * the gap between two icons and the rail flickers. */
+    clearTimeout(lensHideTimer);
+    lensHideTimer = setTimeout(function () {
+      if (rail && !rail.classList.contains('has-lens') && lens) lens.style.opacity = '';
+    }, 180);
+  }
+
+  function nearestRailButton(clientY) {
+    if (!rail) return null;
+    var buttons = rail.querySelectorAll('.split-rail-btn');
+    var best = null;
+    var bestDist = Infinity;
+    for (var i = 0; i < buttons.length; i++) {
+      var b = buttons[i].getBoundingClientRect();
+      var d = Math.abs(clientY - (b.top + b.height / 2));
+      if (d < bestDist) { bestDist = d; best = buttons[i]; }
+    }
+    return best;
+  }
+
+  function attachLens() {
+    if (!rail || rail.dataset.lensBound === '1') return;
+    rail.dataset.lensBound = '1';
+    ensureLens();
+
+    rail.addEventListener('pointermove', function (e) {
+      if (e.pointerType === 'touch') return;
+      lensTo(nearestRailButton(e.clientY));
+    });
+    rail.addEventListener('pointerleave', hideLens);
+    /* Keyboard focus moves the lens too, or tabbing through the rail would light nothing
+     * and the magnified icon would stay wherever the mouse last was. */
+    rail.addEventListener('focusin', function (e) {
+      var btn = e.target.closest && e.target.closest('.split-rail-btn');
+      if (btn) lensTo(btn);
+    });
+    rail.addEventListener('focusout', hideLens);
   }
 
   function renderRail() {
@@ -220,8 +358,11 @@
       btn.className = 'split-rail-btn';
       btn.dataset.panel = panel.id;
       btn.title = panel.label;
+      /* The floating label reads from this. The title stays as well: it is what a
+       * screen reader announces and what shows if the hover label is ever suppressed. */
+      btn.dataset.label = panel.label;
       btn.setAttribute('aria-label', panel.label);
-      btn.innerHTML = '<span class="material-icons-round">' + panel.icon + '</span>';
+      btn.innerHTML = '<span class="material-icons-round">' + railIconMarkup(panel) + '</span>';
       rail.appendChild(btn);
     });
     syncRail();

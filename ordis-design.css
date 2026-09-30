@@ -4802,3 +4802,275 @@ body.has-vertical-rail .dock-strip {
   background: rgba(110, 231, 183, 0.14);
   border-color: rgba(110, 231, 183, 0.5);
 }
+
+/* ============================================================================
+   THE RAIL AS A CAPSULE, WITH A LENS
+   ----------------------------------------------------------------------------
+   The rail was a 60px column with a border down its right-hand side and a background
+   behind it, which reads as a divider with buttons on it rather than as a thing with a
+   surface. It is a capsule now: inset from the window edge, rounded top and bottom, and
+   filled from one token. The window shows through the gap at the rounded ends, which is
+   the only way a rounded corner reads as a rounded corner rather than as a dark shape.
+
+   The lens is the App Store's: a circle that rides the rail and blows up whichever icon
+   is under the cursor. It is one element moved with a transform rather than one per
+   button, because thirteen circles that each have to know whether they are the hovered
+   one is thirteen ways for the effect to stutter at the boundary between neighbours.
+
+   Labels are not in the rail. Thirteen labels stacked down a 48px column is a wall of
+   text, and the icons are the point. The label floats out beside the rail on hover
+   instead, where it costs nothing when it is not wanted.
+   ========================================================================== */
+
+:root {
+  --rail-surface: rgba(16, 27, 37, 0.92);
+  --rail-border: rgba(255, 255, 255, 0.10);
+  --lens-size: 46px;
+}
+
+.split-rail {
+  flex: 0 0 52px;
+  width: 52px;
+  gap: 3px;
+  padding: 10px 0;
+  border-right: 0;
+  background: var(--rail-surface);
+  border: 1px solid var(--rail-border);
+  /* Only the outer corners are this rail's own. The right-hand edge butts against the
+     workspace, so rounding it would open a gap along the full height of the app. */
+  border-radius: 22px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 16px 40px rgba(0, 0, 0, 0.40);
+  /* The lens is positioned against the rail's padding box, so it cannot be clipped by
+     the rail's own overflow when it travels past the first or last icon. */
+  position: relative;
+}
+
+.split-rail-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  z-index: 1; /* above the lens, so the icon it magnifies is on top of the glass */
+}
+
+/* The lens.
+   Positioned by transform only: left/top are pinned and the travel is a translate, so
+   moving it never touches layout. That is the difference between a lens that glides and
+   one that makes the whole rail relayout on every pointer move. */
+.split-rail-lens {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: var(--lens-size);
+  height: var(--lens-size);
+  margin-left: calc(var(--lens-size) / -2);
+  margin-top: calc(var(--lens-size) / -2);
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.30);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.34),
+    0 8px 22px rgba(0, 0, 0, 0.55);
+
+  transform: translate3d(0, 0, 0);
+  transition: opacity 0.16s ease, transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+.split-rail.has-lens .split-rail-lens { opacity: 1; }
+
+/* The magnified icon. The lens is the same width as the button, so the icon has to grow
+   well past 1:1 to look like it is being blown up rather than just bolded.
+
+   The drawn icons sit inside the ligature span rather than replacing it, because the rail
+   and the strip build their icon differently. Matching the span's svg as well as the
+   .dock-tab-art class is what keeps both kinds magnifying. */
+/* The magnified icon.
+   Sized rather than transformed. A transform was tried first and did not take: with the
+   is-lensed class applied the svg's computed transform stayed the identity matrix and the
+   box never grew, while the same scale() applied inline with !important worked, and a
+   control svg scaled fine. A rule that matches and does nothing is worse than no rule, and
+   width and height were already proven to apply to these svgs from the stylesheet. 28px on
+   a 21px icon is the same 1.34, and the transition still runs. */
+.split-rail-btn.is-lensed .material-icons-round,
+.split-rail-btn.is-lensed .dock-tab-art,
+.split-rail-btn.is-lensed .material-icons-round > svg {
+  width: 28px;
+  height: 28px;
+  transition: width 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+              height 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+              color 0.14s ease;
+}
+
+
+
+.split-rail-btn .material-icons-round,
+.split-rail-btn .dock-tab-art {
+  transition: width 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+              height 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+              color 0.14s ease;
+}
+
+/* The label, floating out to the right of the rail on hover.
+   Positioned rather than in the flow, so appearing costs the rail no width and pushes
+   nothing. */
+.split-rail-btn::after {
+  content: attr(data-label);
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%) scale(0.94);
+  transform-origin: left center;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: rgba(12, 20, 28, 0.96);
+  border: 1px solid var(--rail-border);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.14s ease, transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 20;
+}
+
+.split-rail-btn:hover::after,
+.split-rail-btn:focus-visible::after {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .split-rail-lens,
+  .split-rail-btn .material-icons-round,
+  .split-rail-btn .dock-tab-art,
+  .split-rail-btn::after { transition: none; }
+}
+
+/* ============================================================================
+   AMBER GLASS - a trial, off by default
+   ----------------------------------------------------------------------------
+   Enabled by adding .theme-amber-glass to <body>. Nothing above this block changes, so
+   removing that one class is the whole revert. It is a trial, not a decision: the app is
+   dark, several panels are dark on purpose, and nobody has seen this next to the game
+   yet.
+
+   What makes something read as glass, in order of how much each one contributes:
+
+   1. A bright edge. Real glass catches light along its rim, and that thin bright line
+      is most of what the eye reads as "glass". A blurred surface with no highlight on
+      its border reads as "faded", not as glass.
+   2. Something behind it. Frosted glass is a blur of whatever is behind, so over one flat
+      colour it blurs nothing and looks like a flat panel. The wash below is not
+      decoration; without it the effect is invisible no matter how much blur is applied.
+   3. Translucency in the fill, which is where the tint goes. #fff0db at full opacity is
+      cream paint. At around a third of that it is tinted glass, and you can still see
+      the wash and the panel edges through it.
+   4. The blur, last. It is the least interesting of the four and the most expensive.
+
+   #fff0db is a very light cream, so the text scale has to be inverted with it. Text that
+   was near-white on near-black is unreadable on cream, and it is not a hue you can keep:
+   --text-primary is a near-white and has to become a near-black. Grade badge colours were
+   picked against the dark background and are not corrected here - they are the thing to
+   check first, and to measure rather than eyeball.
+   ========================================================================== */
+
+body.theme-amber-glass {
+  /* The tint, as glass: mostly transparent, so the wash and the edges behind it survive. */
+  --glass-tint: rgba(255, 240, 219, 0.34);
+  --glass-tint-strong: rgba(255, 240, 219, 0.52);
+  --glass-edge: rgba(255, 255, 255, 0.62);
+  --glass-edge-soft: rgba(255, 255, 255, 0.34);
+
+  --bg-primary: #fff0db;
+  --bg-secondary: rgba(255, 244, 228, 0.72);
+  --border-color: rgba(120, 92, 58, 0.22);
+
+  /* Inverted for a light ground. Not "the same greys, darker": the text scale has to
+     start near-black, or nothing on the cream is readable. */
+  --text-primary: #241a12;
+  --text-secondary: #5b4632;
+  --text-dim: #8a7259;
+  --text-accent: #9a5b1f;
+  --accent-color: #b4701f;
+
+  color: var(--text-primary);
+  /* The wash the glass blurs. Three soft pools of colour, because one flat field blurs
+     to nothing and the effect reads as a flat panel. */
+  background-color: var(--bg-primary);
+  background-image:
+    radial-gradient(58% 42% at 12% 8%, rgba(255, 197, 138, 0.55), transparent 70%),
+    radial-gradient(52% 46% at 88% 18%, rgba(255, 168, 176, 0.42), transparent 72%),
+    radial-gradient(64% 58% at 50% 104%, rgba(196, 168, 255, 0.40), transparent 74%);
+  background-attachment: fixed;
+}
+
+/* The glass recipe, applied only where a surface is large enough for it to read.
+   Lists and grids are deliberately excluded: backdrop-filter re-rasterises on every
+   frame, and a pane full of fifty glass cards would stutter through every drag. */
+body.theme-amber-glass .split-rail,
+body.theme-amber-glass .dock-strip,
+body.theme-amber-glass .split-pane,
+body.theme-amber-glass .dock-float,
+body.theme-amber-glass .riven-detail__card {
+  background: var(--glass-tint);
+  border: 1px solid var(--glass-edge-soft);
+  backdrop-filter: blur(14px) saturate(170%);
+  -webkit-backdrop-filter: blur(14px) saturate(170%);
+  /* The bright rim. This is the part that reads as glass. */
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+    0 14px 34px rgba(90, 60, 30, 0.20);
+}
+
+/* A control that must stay legible on the wash gets a stronger fill, because glass over
+   a bright pool of colour is the one case where the tint stops being enough. */
+body.theme-amber-glass .split-rail-btn.is-active,
+body.theme-amber-glass .dock-tab.is-active {
+  background: var(--glass-tint-strong);
+  border: 1px solid var(--glass-edge);
+  color: #2a1d12;
+}
+
+/* Inputs sit on glass, so their text needs the full-strength fill or the placeholder and
+   the caret disappear into the wash. */
+body.theme-amber-glass .search-input,
+body.theme-amber-glass input,
+body.theme-amber-glass textarea {
+  background: rgba(255, 248, 238, 0.82);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+/* Chromium still rasterises backdrop-filter on a software path when the GPU is off, and
+   this app already disables hardware acceleration in places. A painted fallback keeps it
+   usable rather than turning every surface into a grey smear. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  body.theme-amber-glass .split-rail,
+  body.theme-amber-glass .dock-strip,
+  body.theme-amber-glass .split-pane,
+  body.theme-amber-glass .dock-float {
+    background: rgba(255, 243, 225, 0.92);
+  }
+}
+
+/* The drawn icons have to occupy the same box as the ligatures beside them.
+   The SVGs are emitted at 19px for the dock strip, and the rail's ligatures are 21px, so
+   the two kinds of icon sat at different sizes in the same column - the drawn ones read as
+   slightly smaller and the row looked uneven. CSS width and height override an SVG's own
+   attributes, so the generator does not need to know which rail it is going into. */
+.split-rail-btn .material-icons-round > svg,
+.split-rail-btn .dock-tab-art {
+  width: 21px;
+  height: 21px;
+}
+
+/* The lens magnifies what is inside it, so the icon has to be centred in the circle
+   rather than merely scaled about its own middle. */
+
