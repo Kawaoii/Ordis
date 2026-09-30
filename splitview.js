@@ -246,17 +246,22 @@ var DEFAULT_FIRST_PANE = 'checklist';
   function attachIconFallbacks() {
     if (!rail || rail.dataset.iconFallbackBound === '1') return;
     rail.dataset.iconFallbackBound = '1';
-    /* Capture phase: error does not bubble, so a listener on the rail only ever hears its
-     * own failures unless it is registered for capture. */
-    rail.addEventListener('error', function (e) {
+    /* Both places an icon is rendered, because both build their markup independently and
+     * the pane title bar was left with a broken image for the two panels whose art is not
+     * in the repo yet - the rail had been fixed and this had not. Capture phase: error
+     * does not bubble, so a listener only ever hears its own failures without it. */
+    var onError = function (e) {
       var img = e.target;
       if (!img || img.tagName !== 'IMG') return;
       var glyph = document.createElement('span');
       glyph.className = 'material-icons-round';
       glyph.textContent = img.dataset.fallbackIcon || 'category';
       if (img.parentNode) img.parentNode.replaceChild(glyph, img);
-    }, true);
+    };
+    rail.addEventListener('error', onError, true);
+    if (panesHost) panesHost.addEventListener('error', onError, true);
   }
+
 
   /* The lens: one circle that rides the rail and magnifies the icon under the cursor.
    *
@@ -488,6 +493,7 @@ var DEFAULT_FIRST_PANE = 'checklist';
     }
     panesHost.classList.remove('is-empty');
 
+    panesHost.setAttribute('data-count', String(wanted.length));
     var layout = layoutFor(wanted.length, state.threeLayout);
     panesHost.setAttribute('data-layout', layout);
 
@@ -514,11 +520,22 @@ var DEFAULT_FIRST_PANE = 'checklist';
 
       var head = document.createElement('header');
       head.className = 'split-pane-head';
+      /* The icon goes through railIconMarkup for the same reason the rail's does. This
+       * head interpolated panel.icon straight into HTML, so a drawn icon arrived as its
+       * own source and an image path arrived as the words "assets/void-trace.png" printed
+       * on the pane - the same fault the rail had, still here. */
       head.innerHTML =
-        '<span class="material-icons-round split-pane-icon">' + panel.icon + '</span>' +
+        '<span class="material-icons-round split-pane-icon">' + railIconMarkup(panel) + '</span>' +
         '<span class="split-pane-title"></span>' +
+        /* Only meaningful with three panes open, where there is a choice to make. Hidden
+         * otherwise rather than disabled, because a control that cannot do anything should
+         * not be sitting in the title bar of every pane. */
+        '<button class="split-pane-layout" type="button" ' +
+        'title="Switch between the three-pane arrangements" aria-label="Switch arrangement">' +
+        '<span class="material-icons-round">view_column</span></button>' +
         '<button class="split-pane-close" type="button" title="Close this pane">' +
         '<span class="material-icons-round">close</span></button>';
+
       // Filled through textContent rather than baked into the markup above: the label
       // comes from the panel registry and must not be interpolated into HTML.
       head.querySelector('.split-pane-title').textContent = panel.label;
@@ -995,6 +1012,17 @@ var DEFAULT_FIRST_PANE = 'checklist';
       if (pane) closePane(pane.dataset.panel);
       return;
     }
+
+    /* The arrangement switch. Handled here rather than bound per button because the
+     * buttons are rebuilt on every render, so a listener attached at build time would be
+     * gone by the second pane change - the same class of fault as the lens being cleared
+     * out of the rail by a re-render. */
+    var layoutBtn = e.target.closest ? e.target.closest('.split-pane-layout') : null;
+    if (layoutBtn) {
+      cycleThreeLayout();
+      return;
+    }
+
     // Clicking a pane's header brings it to the front of the pair, which is what makes
     // a two-pane layout feel like two tabs rather than one fixed arrangement.
     var head = e.target.closest ? e.target.closest('.split-pane-head') : null;

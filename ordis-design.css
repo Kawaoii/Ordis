@@ -5162,3 +5162,42 @@ body.theme-amber-glass textarea {
 @media (prefers-reduced-motion: reduce) {
   .split-rail-btn.is-refused { animation: none; }
 }
+
+/* The arrangement switch, in the pane's own title bar.
+   Shown only when three panes are open, because one and two panes have a single
+   arrangement and a control that cannot do anything has no business in every title bar.
+   The host carries the count so this is one rule rather than a class toggled on each
+   button on every render. */
+.split-panes:not([data-count="3"]) .split-pane-layout { display: none; }
+
+.split-pane-layout {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.split-pane-layout .material-icons-round { font-size: 16px; }
+
+.split-pane-layout:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--text-primary);
+}
+
+.split-pane-layout:focus-visible {
+  outline: 2px solid var(--accent-color, #6ee7b7);
+  outline-offset: 1px;
+}
+
+/* The close button sits after it, so it no longer needs to push itself clear. */
+.split-pane-close { margin-left: 0; }
