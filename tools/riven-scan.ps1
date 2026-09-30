@@ -210,15 +210,25 @@ public static class RivenScan {
       bool looksStat = line.IndexOf('%') > 0 || line.IndexOf("%", StringComparison.Ordinal) > 0
         || (line.Length > 3 && (line[0] == '+' || line[0] == '-') && IsDigit(line[1]))
         || (line.Length > 3 && (line[0] == 'x' || line[0] == 'X') && IsDigit(line[1]));
-      if (!started && looksStat) {
-        started = true;
-        int cut = -1;
-        for (int i = 1; i < line.Length; i++) {
-          if ((line[i] == '+' || line[i] == '-') && i + 1 < line.Length && IsDigit((byte)line[i + 1])) { cut = i; break; }
-          if ((line[i] == 'x' || line[i] == 'X') && i + 1 < line.Length && IsDigit((byte)line[i + 1])
-              && i + 2 < line.Length && line[i + 2] == '.') { cut = i; break; }
-        }
-        if (cut > 0) {
+        if (!started && looksStat) {
+          started = true;
+          int cut = -1;
+          for (int i = 1; i < line.Length; i++) {
+            if ((line[i] == '+' || line[i] == '-') && i + 1 < line.Length && IsDigit((byte)line[i + 1])) { cut = i; break; }
+            if ((line[i] == 'x' || line[i] == 'X') && i + 1 < line.Length && IsDigit((byte)line[i + 1])
+                && i + 2 < line.Length && line[i + 2] == '.') { cut = i; break; }
+          }
+          // A line can be the riven name with the first stat already glued to it, which
+          // is what happens when the sign is missing: "pyrana sati zetisus 75.5% weapon
+          // recoil" carries no sign, so nothing above matched and the whole line was
+          // taken as the name. Cut at the number instead.
+          if (cut < 0) {
+            for (int i = 1; i < line.Length; i++) {
+              if (IsDigit((byte)line[i]) && !IsDigit((byte)line[i - 1])) { cut = i; break; }
+            }
+          }
+          if (cut > 0) {
+
           string name = line.Substring(0, cut).Trim();
           if (name.Length > 0) kept.Add(name);
           string rest = line.Substring(cut).Trim();
@@ -247,6 +257,31 @@ public static class RivenScan {
   }
 
   public static List<Reg> AllByStart = new List<Reg>();
+
+  /* True when the block opens with something that reads as a weapon name: letters and
+   * spaces, at least two words, and no leading number or symbol. */
+  static bool StartsWithName(string block) {
+    int nl = block.IndexOf('\n');
+    string first = (nl > 0 ? block.Substring(0, nl) : block).Trim();
+    if (first.Length < 4) return false;
+    if (!IsLetter((byte)first[0])) return false;
+
+    // Counted by counting runs of letters, and any non-letter ends a run. Treating a
+    // space as "still inside the word" counted "Sobek Acri-Vexidra" as one word and
+    // rejected almost every real riven.
+    int words = 0;
+    bool inWord = false;
+    for (int i = 0; i < first.Length; i++) {
+      if (IsLetter((byte)first[i])) {
+        if (!inWord) { inWord = true; words++; }
+      } else {
+        inWord = false;
+      }
+    }
+    return words >= 2;
+  }
+
+  public static long NamelessSkipped = 0;
 
   /* Every stat line must carry an explicit sign.
    *
@@ -376,6 +411,13 @@ public static class RivenScan {
               }
               string block = Trim(buf, wStart, wEnd);
               if (block.Length < 16) continue;
+              // The block has to open with a weapon name. Some riven records are split
+              // across two strings, leaving a fragment that is stats only: "+103%
+              // Multishot / -63.2% Critical Damage MR 13 Rifle" with no name anywhere in
+              // the window. Those cannot be matched to a weapon, so they are not rivens
+              // as far as anything downstream is concerned, and letting them through
+              // inflates the count with fragments.
+              if (!StartsWithName(block)) { NamelessSkipped++; continue; }
               if (!seen.Add(Normalise(block))) continue;
               found.Add(new Found {
                 Address = (start + pos - carry + wStart).ToString("X"),
@@ -458,6 +500,7 @@ $json = [pscustomobject]@{
   bytesRead = [RivenScan]::BytesRead
   regionsSkipped = [RivenScan]::RegionsSkipped
   ambiguousSkipped = [RivenScan]::AmbiguousSkipped
+  namelessSkipped = [RivenScan]::NamelessSkipped
   cachedRegionsUsed = [RivenScan]::CachedRegionsUsed
   cacheWritten = $cacheWritten
   timedOut = ($found.Count -ge $StopAfter)
