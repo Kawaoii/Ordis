@@ -60,7 +60,12 @@
   var RAIL_WIDTH = 60;
   var DIVIDER_MIN = 260;   // px, so a pane can never be dragged shut entirely
   var DRAG_THRESHOLD = 6;  // px before a press on the rail becomes a drag
-  var MAX_PANES = 3;
+var MAX_PANES = 3;
+
+/* What a fresh install opens on. Named rather than read from the dock's state on purpose:
+   see the use in init(). */
+var DEFAULT_FIRST_PANE = 'checklist';
+
 
   var rail = null;
   var workspace = null;
@@ -697,10 +702,39 @@
   function splitWith(id) {
     if (!state.panes.length) { setPanes([id]); return; }
     if (state.panes.indexOf(id) > -1) { openPrimary(id); return; }
-    /* A fourth panel replaces the oldest rather than reflowing. Three is the cap, and
-     * dropping the oldest is the arrangement that needs no new shape. */
-    setPanes(state.panes.concat([id]).slice(-MAX_PANES), true);
+    /* Three is the cap, and a fourth is refused rather than accommodated.
+     *
+     * It used to drop the oldest pane to make room, which quietly closed a panel the
+     * player had opened - the drag was accepted, a new pane appeared, and something they
+     * were using vanished with no sign that it had. Three is a layout that exists and has
+     * been looked at; a fourth is a shape nobody has designed, so the honest answer to
+     * "can I open a fourth" is no, and it should look like a no rather than like success.
+     *
+     * The cue is on the dragged button, because that is what the player is holding. A
+     * refusal that only existed in the log would be indistinguishable from a dropped
+     * frame. */
+    if (state.panes.length >= MAX_PANES) {
+      flashRailFull(id);
+      return;
+    }
+    setPanes(state.panes.concat([id]), true);
   }
+
+  /* Briefly mark a rail button as refused, so a full workspace reads as a decision
+     rather than as the app dropping the drag. */
+  function flashRailFull(id) {
+    if (!rail) return;
+    var btn = rail.querySelector('.split-rail-btn[data-panel="' + id + '"]');
+    if (!btn) return;
+    btn.classList.remove('is-refused');
+    // Force a reflow so re-adding the class restarts the animation on a second refusal,
+    // which otherwise has nothing to animate from and shows nothing at all.
+    void btn.offsetWidth;
+    btn.classList.add('is-refused');
+    clearTimeout(btn._refusedTimer);
+    btn._refusedTimer = setTimeout(function () { btn.classList.remove('is-refused'); }, 420);
+  }
+
 
   /* Toggle between the two three-pane arrangements. Only meaningful with three open,
    * and doing nothing with fewer is deliberate: a player rearranging a two-pane split
@@ -988,10 +1022,22 @@
     // reach it, and keeps its saved layout intact.
     document.body.classList.add('has-split-rail');
 
+    /* A fresh install opens on Equipment, and only on Equipment.
+     *
+     * The first pane used to be seeded from whichever rail button the dock last had
+     * active, so the app opened on whatever you happened to leave open - and because the
+     * dock's saved state feeds it, anything that reset the dock reset this too. The two
+     * are separate decisions and were sharing one variable: the dock remembers which tab
+     * you were last on, the split remembers which panels you arranged, and neither should
+     * be able to overwrite the other.
+     *
+     * Equipment is the base because it is the app's front door: the inventory, and
+     * everything else reachable from it. */
     if (!state.panes.length) {
-      var active = document.querySelector('.split-rail-btn.is-active');
-      state.panes = [active ? active.dataset.panel : (panels()[0] || {}).id].filter(Boolean);
+      var base = panelById(DEFAULT_FIRST_PANE) ? DEFAULT_FIRST_PANE : (panels()[0] || {}).id;
+      state.panes = base ? [base] : [];
     }
+
     Promise.resolve(renderPanes());
     syncRail();
     save();

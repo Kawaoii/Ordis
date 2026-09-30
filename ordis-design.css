@@ -5140,3 +5140,25 @@ body.theme-amber-glass textarea {
   .split-pane .split-pane-title { font-size: 9px; }
   .split-pane .riven-row__name { font-size: 11px; }
 }
+
+/* A refused drop: the workspace is full.
+   Two short nudges and a wash of the accent, on the button the player is holding. It has
+   to read as "no" rather than as nothing happening, because the alternative - a fourth
+   pane opening and one of the three closing - looks like success. */
+.split-rail-btn.is-refused {
+  animation: railRefused 420ms ease;
+  border-color: rgba(251, 113, 133, 0.75);
+  color: #fb7185;
+}
+
+@keyframes railRefused {
+  0%   { transform: translateX(0); }
+  22%  { transform: translateX(-4px); }
+  46%  { transform: translateX(4px); }
+  70%  { transform: translateX(-2px); }
+  100% { transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .split-rail-btn.is-refused { animation: none; }
+}
