@@ -689,6 +689,21 @@ const RIVEN_OVERLAY_LOG_POLL_INTERVAL_MS = 300;
  * megabyte rather than the whole file. */
 const RIVEN_OVERLAY_LOG_TAIL_BYTES = 512 * 1024;
 const RIVEN_OVERLAY_SCAN_DELAY_MS = 500;
+
+/* How long to wait before trying again, which depends on what missed.
+ *
+ * These were used before they were written down, so the retry path threw a ReferenceError
+ * the first time a scan failed - which is the common case, and the only case the retry
+ * exists for. Every failing scan died on the way to its second attempt.
+ *
+ * A memory miss and a screen miss want opposite things. Memory answering takes about a
+ * fifth of a second, so after one misses there is no reason to wait: the game may simply
+ * not have written the roll yet, and the screen is right there. A screen miss usually
+ * means the frame is still animating, so that one does want to wait, but less than the
+ * flat half second it used to - half of that budget was spent asleep after a fast answer
+ * that had already arrived. */
+const RIVEN_OVERLAY_MEMORY_RETRY_DELAY_MS = 40;
+const RIVEN_OVERLAY_SCREEN_RETRY_DELAY_MS = 320;
 // The cards are only on screen while the choice prompt is up, and a real reroll
 // showed the player answering it 1.5s after it appeared. The first attempt waits a
 // fifth of that, and the burst is given room for four reads so a frame caught
