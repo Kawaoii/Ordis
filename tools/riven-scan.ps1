@@ -76,6 +76,10 @@ public static class RivenScan {
   public static long BytesRead = 0;
   public static int RegionsRead = 0;
   public static long RegionsSkipped = 0;
+  // Rivens refused because a stat had no sign and so could not be told apart from a
+  // penalty. Surfaced rather than swallowed: a silently missing riven is worse than a
+  // reported one.
+  public static long AmbiguousSkipped = 0;
   // How many remembered regions this scan started from. Zero means there was no cache
   // yet and the whole space was walked, which only has to happen once.
   public static int CachedRegionsUsed = 0;
@@ -244,6 +248,41 @@ public static class RivenScan {
 
   public static List<Reg> AllByStart = new List<Reg>();
 
+  /* Every stat line must carry an explicit sign.
+   *
+   * The game keeps each riven in memory twice. One copy is lower case and one is title
+   * case, and they are not equally faithful: measured across a live collection, the
+   * lower-case copy had 113 signed positives and not a single negative, while the
+   * title-case copy had 15 real negatives. The lower-case copy simply drops the minus.
+   *
+   * That makes it unusable. "-7s Combo Duration" read as "7s combo duration" turns a
+   * penalty into a bonus and grades the riven as far better than it is, which is the
+   * one thing this reader must never do. A block with an unprefixed number is therefore
+   * rejected rather than guessed at, and the count is reported so a missing riven is
+   * visible instead of silent. */
+  static bool AllStatsSigned(byte[] b, int from, int to) {
+    for (int i = from; i < to; i++) {
+      // Both bytes folded: the trailer is written "MR 13", and comparing only the
+      // second one to a lower case 'r' while testing the first against a lower case
+      // 'm' means it never matches, and the rank digits then look like unsigned stats.
+      if (Lower(b[i]) == (byte)'m' && i + 8 < to && Lower(b[i + 1]) == (byte)'r') break; // trailer
+      if (!IsDigit(b[i])) continue;
+      if (i == from) continue;
+      byte prev = b[i - 1];
+      // "+12.5%" or "-0.3", and "x1.04" which is a multiplier rather than a bonus.
+      if (prev == (byte)'+' || prev == (byte)'-' || prev == (byte)'x' || prev == (byte)'X') continue;
+      // A further digit of the same number, and the fraction of a decimal. Without the
+      // decimal point case every "+72.1%" was refused, because the 1 is preceded by a
+      // full stop and that is neither a sign nor another digit.
+      if (IsDigit(prev) || prev == (byte)'.') continue;
+      return false;
+    }
+    return true;
+  }
+
+  static List<Found> refused = new List<Found>();
+  public static List<Found> Refused { get { return refused; } }
+
   public static List<Found> Run(int pid, int stopAfter, int maxSeconds, string regionMode, long[] preferredStarts) {
     var found = new List<Found>();
     var seen = new HashSet<string>();
@@ -324,6 +363,17 @@ public static class RivenScan {
               int wStart = nul >= 0 ? nul + 1 : Math.Max(0, i - 700);
               int wEnd = Math.Min(have, end);
               if (CountStats(buf, wStart, wEnd) < 2 && !HasMultiplier(buf, wStart, wEnd)) continue;
+              if (!AllStatsSigned(buf, wStart, wEnd)) {
+                AmbiguousSkipped++;
+                // Kept for diagnosis only, never parsed. Needed to tell a rivens only
+                // lossy copy, which would be a genuinely missing riven, apart from a
+                // duplicate of one already accepted.
+                if (refused.Count < 200) {
+                  string rb = Trim(buf, wStart, wEnd);
+                  if (rb.Length >= 16) refused.Add(new Found { Address = (start + pos - carry + wStart).ToString("X"), Text = rb });
+                }
+                continue;
+              }
               string block = Trim(buf, wStart, wEnd);
               if (block.Length < 16) continue;
               if (!seen.Add(Normalise(block))) continue;
@@ -361,9 +411,15 @@ if ($Cache -and -not $RebuildCache -and (Test-Path -LiteralPath $Cache)) {
     $cached = Get-Content -LiteralPath $Cache -Raw | ConvertFrom-Json
     if ($cached) { $preferred = @($cached | ForEach-Object { [long]$_ }) }
   } catch {
-    # A corrupt cache is not a reason to fail. Falling back to a full walk costs time,
-    # not correctness, and it rewrites a good cache on the way out.
-    $preferred = @()
+    # A cache written by an older build is newline separated rather than JSON. Read that
+    # too rather than discarding a perfectly good list of regions.
+    try {
+      $lines = @(Get-Content -LiteralPath $Cache | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+      $parsed = @();
+      foreach ($l in $lines) { $v = 0L; if ([long]::TryParse($l, [ref]$v)) { $parsed += $v } }
+      if ($parsed.Count) { $preferred = $parsed }
+    } catch { $preferred = @() }
+    if (-not $preferred.Count) { $preferred = @() }
   }
 }
 
@@ -384,9 +440,11 @@ if ($Cache) {
   }
   if ($found.Count -ge 20 -and $hits.Count -gt 0) {
     try {
+      # A real JSON array. Newline separated bare numbers look like they would parse
+      # but do not, ConvertFrom-Json throws, and the cache silently never engages.
       [System.IO.File]::WriteAllText(
         $Cache,
-        (@($hits) | ForEach-Object { $_.ToString() }) -join "`n",
+        (ConvertTo-Json -InputObject @($hits) -Compress),
         [System.Text.UTF8Encoding]::new($false))
       $cacheWritten = $true
     } catch { }
@@ -399,11 +457,13 @@ $json = [pscustomobject]@{
   mbPerSec = [math]::Round(([RivenScan]::BytesRead / 1MB) / [math]::Max(0.001, $sw.Elapsed.TotalSeconds), 1)
   bytesRead = [RivenScan]::BytesRead
   regionsSkipped = [RivenScan]::RegionsSkipped
+  ambiguousSkipped = [RivenScan]::AmbiguousSkipped
   cachedRegionsUsed = [RivenScan]::CachedRegionsUsed
   cacheWritten = $cacheWritten
   timedOut = ($found.Count -ge $StopAfter)
   count = $found.Count
   rivens = @($found | ForEach-Object { [pscustomobject]@{ address = $_.Address; text = $_.Text } })
+  refused = @([RivenScan]::Refused | ForEach-Object { [pscustomobject]@{ address = $_.Address; text = $_.Text } })
 } | ConvertTo-Json -Depth 5
 
 [System.IO.File]::WriteAllText($Out, $json, [System.Text.UTF8Encoding]::new($false))
@@ -414,6 +474,9 @@ if (-not $Quiet) {
   if ([RivenScan]::CachedRegionsUsed -gt 0) { Write-Output ("  started from " + [RivenScan]::CachedRegionsUsed + " remembered region(s)") }
   else { Write-Output ("  full walk (no region cache yet)") }
   Write-Output ("  skipped " + [RivenScan]::RegionsSkipped + " regions")
+  if ([RivenScan]::AmbiguousSkipped -gt 0) {
+    Write-Output ("  refused " + [RivenScan]::AmbiguousSkipped + " block(s) with an unsigned stat; those copies drop the minus sign and would misgrade")
+  }
   if ($cacheWritten) { Write-Output ("  cached the regions that held them, next scan starts there") }
   foreach ($r in $found) { Write-Output ("  --- " + $r.Address); Write-Output ("    " + ($r.Text -replace "`n", " | ")) }
 }

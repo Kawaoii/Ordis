@@ -2042,7 +2042,11 @@ async function scanRivensFromMemory(options) {
       // collection being complete is a partial answer and the player should know.
       timedOut: !!payload.timedOut,
       cachedRegionsUsed: payload.cachedRegionsUsed || 0,
-      cacheWritten: !!payload.cacheWritten
+      cacheWritten: !!payload.cacheWritten,
+      // Rivens the reader refused because the game's own copy of them drops a minus
+      // sign. Passed on so the player can be told the read was partial, rather than
+      // seeing a shorter list and assuming that is all they own.
+      ambiguousSkipped: payload.ambiguousSkipped || 0
     };
     return rivenMemoryLastScan;
   })();
