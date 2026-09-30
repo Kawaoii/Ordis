@@ -5074,3 +5074,69 @@ body.theme-amber-glass textarea {
 /* The lens magnifies what is inside it, so the icon has to be centred in the circle
    rather than merely scaled about its own middle. */
 
+
+/* ============================================================================
+   A PANE SCALES ITS OWN CONTROLS
+   ----------------------------------------------------------------------------
+   Two panes side by side, or three, are not smaller windows. They are the same
+   program with less room, and a program that does not respond to having less room does
+   not become denser - it becomes broken, one control too wide at a time. Everything in a
+   pane was sized in pixels against a full window, so a third of the width kept 34px
+   gutters and 13px type and spent the space it was given on margins.
+
+   This block is the second half of the earlier fix. That one dropped the gutters and the
+   card floor; it left every piece of text and every control at its full-window size, which
+   is why panes still looked like shrunken windows rather than like panels designed for
+   their size.
+
+   It is written against the pane's own width for the same reason, and it scales in three
+   steps rather than continuously, because three steps is what can be checked. Every rule
+   here overrides a fixed pixel value further up, deliberately and last in the file, so the
+   two stylesheets can keep disagreeing about the full-window case without this having to
+   know which of them won.
+   ========================================================================== */
+
+/* Shared controls inside a pane. The scale is deliberately shallow: a pane two thirds
+   the width wants its type about a tenth smaller, not half, or it stops being readable
+   and starts being a different app. */
+@container pane (max-width: 860px) {
+  .split-pane .content-topbar { padding-left: 12px; padding-right: 12px; gap: 10px; }
+  .split-pane .search-input { font-size: 13px; height: 34px; }
+  .split-pane .search-icon { font-size: 18px; }
+  .split-pane .filter-btn { font-size: 12px; padding: 5px 11px; }
+  .split-pane .btn { font-size: 12px; padding: 7px 13px; }
+  .split-pane .nav-text { font-size: 12px; }
+  .split-pane .nav-count { font-size: 10px; }
+  .split-pane .nav-item .material-icons-round,
+  .split-pane .nav-asset-icon { font-size: 14px; width: 14px; height: 14px; }
+  .split-pane .split-pane-title { font-size: 11px; }
+  .split-pane .riven-row__name { font-size: 13px; }
+  .split-pane .category-header { padding-left: 12px; padding-right: 12px; }
+}
+
+/* A third of the window. Type goes down another step and the pane's own title bar stops
+   competing with the content for vertical room, which is the scarce axis here. */
+@container pane (max-width: 560px) {
+  .split-pane .content-topbar { padding-left: 8px; padding-right: 8px; gap: 7px; }
+  .split-pane .search-input { font-size: 12px; height: 30px; }
+  .split-pane .search-icon { font-size: 16px; }
+  .split-pane .filter-btn { font-size: 11px; padding: 4px 9px; }
+  .split-pane .btn { font-size: 11px; padding: 6px 10px; }
+  .split-pane .nav-text { font-size: 11px; }
+  .split-pane .nav-count { font-size: 9px; }
+  .split-pane .split-pane-head { padding: 6px 9px; }
+  .split-pane .split-pane-title { font-size: 10px; }
+  .split-pane .riven-row__name { font-size: 12px; }
+}
+
+/* A quarter, or a phone-width strip. Labels go before anything else, because an icon in
+   a 12px box still reads and a word in it does not. */
+@container pane (max-width: 400px) {
+  .split-pane .search-input { font-size: 11px; height: 28px; }
+  .split-pane .filter-btn { font-size: 10px; padding: 3px 7px; }
+  .split-pane .btn { font-size: 10px; padding: 5px 8px; }
+  .split-pane .nav-text,
+  .split-pane .nav-count { display: none; }
+  .split-pane .split-pane-title { font-size: 9px; }
+  .split-pane .riven-row__name { font-size: 11px; }
+}
