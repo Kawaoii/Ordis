@@ -94,7 +94,10 @@ const RIVEN_STATS = {
   HEAT: { display: 'Heat Damage', base: { rifle: 90, shotgun: 90, pistol: 90, archgun: 119.7, melee: 90 }, aliases: ['heat damage', 'heat'] },
   COLD: { display: 'Cold Damage', base: { rifle: 90, shotgun: 90, pistol: 90, archgun: 119.7, melee: 90 }, aliases: ['cold damage', 'cold'] },
   ELEC: { display: 'Electric Damage', base: { rifle: 90, shotgun: 90, pistol: 90, archgun: 119.7, melee: 90 }, aliases: ['electric damage', 'electricity', 'electric', 'elec'] },
-  SLASH: { display: 'Slash Damage', base: { rifle: 119.97, shotgun: 119.97, pistol: 119.97, archgun: 90, melee: 119.7 }, aliases: ['slash damage', 'slash'] },
+  // The trailing aliases are the abbreviations the community good-rolls sheet uses.
+  // They are two letters where the game's own wording is longer, so nothing else maps
+  // onto them, and a stat that fails to resolve is graded against nothing at all.
+  SLASH: { display: 'Slash Damage', base: { rifle: 119.97, shotgun: 119.97, pistol: 119.97, archgun: 90, melee: 119.7 }, aliases: ['slash damage', 'slash', 'sl'] },
   IMP: { display: 'Impact Damage', base: { rifle: 119.97, shotgun: 119.97, pistol: 119.97, archgun: 90, melee: 119.7 }, aliases: ['impact damage', 'impact'] },
   PUNC: { display: 'Puncture Damage', base: { rifle: 119.97, shotgun: 119.97, pistol: 119.97, archgun: 90, melee: 119.7 }, aliases: ['puncture damage', 'puncture'] },
   // The wiki labels these "Damage vs X" while the game renders them "Damage to X"
@@ -108,8 +111,8 @@ const RIVEN_STATS = {
   SC: { display: 'Status Chance', base: { rifle: 90, shotgun: 90, pistol: 90, archgun: 60.3, melee: 90 }, aliases: ['status chance'] },
   PT: { display: 'Punch Through', base: { rifle: 2.7, shotgun: 2.7, pistol: 2.7, archgun: 2.7 }, aliases: ['punch through', 'punch thru'] },
   PFS: { display: 'Projectile Flight Speed', base: { rifle: 90, shotgun: 90, pistol: 90 }, aliases: ['projectile flight speed', 'flight speed', 'projectile speed'] },
-  ZOOM: { display: 'Zoom', base: { rifle: 59.99, pistol: 80.1, archgun: 59.99 }, aliases: ['zoom', 'zoom in', 'ads speed'] },
-  RANGE: { display: 'Range', base: { melee: 1.94 }, aliases: ['range'] },
+  ZOOM: { display: 'Zoom', base: { rifle: 59.99, pistol: 80.1, archgun: 59.99 }, aliases: ['zoom', 'zoom in', 'ads speed', 'z'] },
+  RANGE: { display: 'Range', base: { melee: 1.94 }, aliases: ['range', 'rng'] },
   IC: { display: 'Initial Combo', base: { melee: 24.5 }, aliases: ['initial combo', 'combo count'] },
   ACC: { display: 'Additional Combo Count', base: { melee: 58.77 }, aliases: ['additional combo count', 'extra combo count'] },
   CDUR: { display: 'Combo Duration', base: { melee: 8.1 }, aliases: ['combo duration'] },
