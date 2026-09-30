@@ -440,6 +440,15 @@ function normalizeRivenInventoryEntry(raw) {
      * function kept was either in the grade object or a top-level field it happened to
      * remember. The rank is the answer; a letter on its own throws it away. */
     notation: String(raw.notation || '').trim(),
+    /* The names the parser offered for this riven, best first: the bare weapon, then
+     * the weapon with its riven name. "Hek" and "Hek Sati-fevadra" are the same weapon,
+     * and which of them the market and the sheet are keyed on decides whether the riven
+     * is graded or reported as unrecognised. Carried on the entry because grading now
+     * happens when the riven is filed, and a later re-grade has to reach the same answer
+     * from the same list or the two paths drift. */
+    weaponNameCandidates: Array.isArray(raw.weaponNameCandidates)
+      ? raw.weaponNameCandidates.filter((c) => typeof c === 'string' && c.trim()).slice(0, 4)
+      : [],
     /* True when the sheet annotates this weapon's ranking as being about sale value
      * rather than in-game strength. Shown in the row so a good grade is not read as
      * meaning the riven is strong in a build. */
@@ -471,6 +480,65 @@ function writeRivenInventory(entries) {
   return rivenInventoryWriteChain;
 }
 
+/**
+ * Grade one entry in place, from the community sheet.
+ *
+ * Every path that files a riven goes through this. It used to happen only when someone
+ * pressed "Re-grade all", which left every riven read from the game sitting in the list
+ * with no grade at all, and left a list graded by the previous grader carrying a mixture
+ * of two vocabularies: the old great/good/ok/bad alongside the new S/A/B/C. Filing a
+ * riven and grading it are one action, not two.
+ *
+ * Failure is silent on the entry and not on the list: a riven that cannot be graded
+ * keeps its stats and shows no grade, which is the honest outcome, and the reason is
+ * left in `reasons` for the detail view.
+ */
+async function applyRivenGrade(entry) {
+  if (!entry) return null;
+  let data = null;
+  try {
+    data = await getRivenDataModule().getRivenData();
+  } catch (err) {
+    return entry;
+  }
+  const rivenData = getRivenDataModule();
+
+  const tryGrade = (name) => {
+    if (!name) return null;
+    const found = rivenData.findRivenWeapon(data, name);
+    return found && found.matched ? found.weapon : null;
+  };
+
+  // The bare weapon name first, then the full candidate that carries the riven name.
+  // findRivenWeapon refuses an ambiguous prefix rather than guessing, so a name that
+  // matches several weapons falls through to the next candidate rather than being
+  // graded against the wrong one.
+  const names = [entry.weaponName].concat(Array.isArray(entry.weaponNameCandidates) ? entry.weaponNameCandidates : []);
+  let weapon = null;
+  for (const name of names) { weapon = tryGrade(name); if (weapon) break; }
+  if (!weapon) return entry;
+
+  try {
+    const grade = rivenData.gradeRiven(weapon, entry.stats);
+    if (!grade) return entry;
+    entry.grade = grade.grade;
+    entry.gradeLabel = grade.gradeLabel;
+    entry.score = grade.score;
+    entry.notation = grade.notation || '';
+    entry.priceOriented = !!grade.priceOriented;
+    entry.perfectness = grade.perfectnessKnown ? grade.perfectness : null;
+    entry.perfectnessKnown = !!grade.perfectnessKnown;
+    entry.weaponClass = grade.weaponClass || entry.weaponClass;
+    entry.rivenType = weapon.rivenType || entry.rivenType;
+    entry.disposition = weapon.disposition != null ? weapon.disposition : entry.disposition;
+    entry.reqMasteryRank = weapon.reqMasteryRank != null ? weapon.reqMasteryRank : entry.reqMasteryRank;
+    entry.reasons = Array.isArray(grade.reasons) ? grade.reasons.slice(0, 5) : [];
+    return entry;
+  } catch (err) {
+    return entry;
+  }
+}
+
 function rivenStatsFingerprint(entry) {
   return [entry.weaponName || '']
     .concat(entry.stats.map((s) => (s.isPositive ? '+' : '-') + s.name + ':' + s.value))
@@ -485,6 +553,7 @@ async function addRivenToInventory(entry) {
   // first. A riven saved before this existed picks it up here.
   await ensureRivenModIcons([normalized.rivenType || normalized.weaponClass]);
   normalized = normalizeRivenInventoryEntry(entry) || normalized;
+  await applyRivenGrade(normalized);
 
   const entries = await readRivenInventory();
   const fingerprint = rivenStatsFingerprint(normalized);
@@ -4238,6 +4307,11 @@ async function addRivensToInventory(list) {
     const entry = normalizeRivenInventoryEntry(raw);
     if (entry) normalized.push(entry);
   }
+  // Graded as they are filed, for the same reason the single-entry path grades on the
+  // way in. Leaving this to a later "Re-grade all" is what produced a list where the
+  // newest rivens had no grade and the older ones carried a mixture of the old
+  // great/good/ok/bad scale and the new one.
+  for (const entry of normalized) await applyRivenGrade(entry);
   if (!normalized.length) {
     return { entries: await readRivenInventory(), created: 0 };
   }
@@ -4315,9 +4389,20 @@ ipcMain.handle('riven-inventory-regrade', async () => {
 
   for (const entry of entries) {
     try {
-      // findRivenWeapon returns a { weapon, matched, ... } result, not the
-      // weapon itself.
-      const found = rivenData.findRivenWeapon(data, entry.weaponName);
+      /* The same function the filing path uses.
+       *
+       * It used to be a second, hand-written copy of the lookup and the assignment, and
+       * the two had already drifted: one knew about the riven-name candidate and the
+       * other did not, so a riven graded when filed and the same riven re-graded could
+       * come back with a different grade. */
+      const before = entry.grade;
+      const weaponNames = [entry.weaponName]
+        .concat(Array.isArray(entry.weaponNameCandidates) ? entry.weaponNameCandidates : []);
+      let found = null;
+      for (const name of weaponNames) {
+        const hit = rivenData.findRivenWeapon(data, name);
+        if (hit && hit.matched) { found = hit; break; }
+      }
       const weapon = found && found.weapon;
       if (!weapon) {
         failed += 1;

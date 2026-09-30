@@ -504,19 +504,24 @@ const RIVEN_SPLICE_TRAIT_ALIASES = {
 
 const RIVEN_SPLICE_TRAIT_KEYS = Object.keys(RIVEN_SPLICE_TRAITS);
 
-/**
- * Grades are banded so the numeric score can never contradict the label: a Bad
- * riven always scores below an Ok one, and so on. These mirror the
- * RIVEN_OVERLAY_GRADE_THRESHOLDS already declared in main.js.
- */
-const RIVEN_GRADE_BANDS = {
-  great: { min: 80 },
-  good: { min: 60 },
-  ok: { min: 40 },
-  bad: { min: 0 }
-};
+  /**
+   * Grades are banded so the numeric score can never contradict the label: a D riven
+   * always scores below a C one, and so on. These mirror the
+   * RIVEN_OVERLAY_GRADE_THRESHOLDS already declared in main.js.
+   *
+   * Keyed on the community's S/A/B/C/D. The old great/good/ok/bad ladder sat alongside
+   * it, and a riven graded by one path and a riven graded by the other ended up with
+   * different letters in the same column.
+   */
+  const RIVEN_GRADE_BANDS = {
+    S: { min: 75 },
+    A: { min: 60 },
+    B: { min: 45 },
+    C: { min: 30 },
+    D: { min: 0 }
+  };
 
-const RIVEN_GRADES = ['great', 'good', 'ok', 'bad'];
+  const RIVEN_GRADES = ['S', 'A', 'B', 'C', 'D'];
 
 function normalizeRivenName(name) {
   return String(name || '')
@@ -1243,7 +1248,15 @@ function gradeRiven(weapon, stats) {
       ', so this riven cannot be graded reliably.'
     );
   } else if (goodPositiveCount === 0) {
-    grade = 'bad';
+    /* The fallback ladder, in the community's letters.
+     *
+     * This used to emit great/good/ok/bad while the graded path emitted S/A/B/C, and
+     * the two landed in the same column: a list where 30 rows said "ok" and 28 said "A".
+     * The grade filter chips are keyed on S/A/B/C, so the old letters were not merely
+     * inconsistent, they were unfilterable. A riven clicking "Good" would not appear
+     * under Good, because the row was labelled "ok" and matched nothing. Same scale
+     * everywhere, or the column is lying about what it is showing. */
+    grade = 'D';
     reasons.push('No positive stat is considered good for this weapon.');
   } else if (
     badPositiveCount === 0 &&
@@ -1251,13 +1264,13 @@ function gradeRiven(weapon, stats) {
     (negativeVerdict === 'acceptable' || negativeVerdict === 'none') &&
     satisfiedCombination
   ) {
-    grade = 'great';
+    grade = 'S';
     reasons.push('Every stat is good and the negative is harmless.');
   } else if (goodPositiveCount >= 2 && negativeVerdict === 'acceptable') {
-    grade = 'good';
+    grade = 'A';
     reasons.push('Most stats help and the negative is harmless.');
   } else {
-    grade = 'ok';
+    grade = 'B';
     if (badPositiveCount > 0) reasons.push('Some positives are not useful for this weapon.');
     if (negativeVerdict === 'unlisted') {
       reasons.push('Negative ' + negative.key + ' is not on this weapon\'s harmless list.');

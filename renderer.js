@@ -17847,11 +17847,11 @@ card.addEventListener('auxclick', function(e) {
           escapeRivenText(s.value) + '%</span></div>';
       }).join('');
 
-      var metaBits = [];
-      if (entry.score != null) metaBits.push('score ' + entry.score);
-      if (entry.perfectness != null) metaBits.push(entry.perfectness + '% of max roll');
-      if (entry.disposition != null) metaBits.push('disposition ' + entry.disposition);
-      if (entry.reqMasteryRank) metaBits.push('MR' + entry.reqMasteryRank);
+      /* The row's meta line, built as markup further down so the grade badge and the
+       * community notation can sit in it. It used to be a plain string of
+       * "score 40 · disposition 1.05 · MR10" joined with a middot, which is why the
+       * grade was nowhere in it: the badge was pinned over the thumbnail instead and
+       * was hidden behind the art. */
 
       var listed = !!entry.wfmOrderId;
       var classSlug = rivenMarketClass(entry);
@@ -17861,16 +17861,30 @@ card.addEventListener('auxclick', function(e) {
       // The weapon art is the fallback for a class whose mod icon has not been
       // fetched yet, and the grade tile is the fallback for no art at all.
       var art = entry.modIconUrl || entry.iconUrl;
+      /* The grade sits beside the name, not across the bottom of the thumbnail.
+       *
+       * It used to be an absolutely positioned 17px strip pinned to the bottom of the
+       * thumb, behind the image, so with art present it was covered up: 113 rivens had a
+       * grade in storage and none of them showed one. A 17px strip across a 44px
+       * thumbnail is unreadable anyway. The badge and the community's own notation now
+       * sit in the row's text column, where there is room for both. */
+      var gradeBadge = entry.grade && entry.grade !== 'unknown'
+        ? '<span class="riven-row__grade" data-grade="' + escapeRivenText(entry.grade) + '" title="' +
+            escapeRivenText(entry.gradeLabel || '') + '">' + escapeRivenText(entry.grade) + '</span>'
+        : '<span class="riven-row__grade is-ungraded" title="The community sheet has no ranking for this riven">–</span>';
+      var notation = entry.notation
+        ? '<span class="riven-row__notation" title="The community ranking for this riven">' +
+            escapeRivenText(entry.notation) + '</span>'
+        : '';
       var thumb = art
         ? '<div class="riven-row__thumb" data-grade="' + escapeRivenText(entry.grade || '') + '">' +
             '<img class="riven-row__icon" src="' + escapeRivenText(art) + '" alt="" loading="lazy" ' +
               'onerror="this.closest(\'.riven-row__thumb\')?.classList.add(\'is-broken\')">' +
-            '<span class="riven-row__grade" title="' + escapeRivenText(entry.gradeLabel || '') + '">' +
-              escapeRivenText(entry.grade || '?') + '</span>' +
           '</div>'
-        : '<div class="riven-row__grade" data-grade="' + escapeRivenText(entry.grade || '?') +
-            '" title="' + escapeRivenText(entry.gradeLabel || '') + '">' +
-            escapeRivenText(entry.grade || '?') + '</div>';
+        : '<div class="riven-row__thumb is-broken" data-grade="' + escapeRivenText(entry.grade || '') + '"></div>';
+      var meta = gradeBadge + notation +
+        (entry.disposition ? '<span class="riven-row__disp">disposition ' +
+          escapeRivenText(String(entry.disposition)) + '</span>' : '');
 
       return '<article class="riven-row' + (listed ? ' is-listed' : '') + '" data-riven-id="' +
         escapeRivenText(entry.id) + '" tabindex="0" role="button" ' +
@@ -17882,7 +17896,12 @@ card.addEventListener('auxclick', function(e) {
             (entry.rivenName ? '<span class="riven-row__name">' + escapeRivenText(entry.rivenName) + '</span>' : '') +
             (listed ? '<span class="riven-row__listed-tag">Listed</span>' : '') +
           '</div>' +
-          '<div class="riven-row__meta">' + escapeRivenText(metaBits.join(' · ')) + '</div>' +
+          '<div class="riven-row__meta">' + meta +
+            (entry.rivenType || entry.weaponClass ? '<span class="riven-row__class">' +
+              escapeRivenText(entry.rivenType || entry.weaponClass) + '</span>' : '') +
+            (entry.reqMasteryRank ? '<span class="riven-row__mr">MR' + escapeRivenText(String(entry.reqMasteryRank)) + '</span>' : '') +
+            (entry.score != null ? '<span class="riven-row__score">score ' + escapeRivenText(String(entry.score)) + '</span>' : '') +
+          '</div>' +
           '<div class="riven-row__stats">' + statsHtml + '</div>' +
         '</div>' +
         '<div class="riven-row__actions">' +

@@ -3313,15 +3313,66 @@ input[type="password"].wfm-input {
   display: block;
 }
 
-.riven-row__thumb .riven-row__grade {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 17px;
-  border-radius: 0;
+/* Grade badge, in the row's meta line.
+   It was an absolutely positioned 17px strip across the bottom of the thumbnail,
+   painted behind the image, so with any art present it was covered up entirely: 113
+   rivens carried a grade and none of them showed one. A strip that narrow over a 44px
+   thumbnail was unreadable regardless. Now a chip in the text column, where it has
+   room and where the sort and filter controls can actually act on it. */
+.riven-row__grade {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 5px;
   font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #0b0b12;
   background: var(--riven-grade-color, var(--text-dim));
+}
+
+.riven-row__grade.is-ungraded {
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.06);
+  font-weight: 400;
+}
+
+/* Grade colours, shared by the row badge and the detail card so the two cannot drift.
+   The detail card had its own set and the row badge had none, so every row fell back to
+   the dim default and the grades were both hidden and colourless. D is the fallback
+   ladder's worst letter, not a community rank, and is deliberately the greys. */
+.riven-row__grade[data-grade="S"], .riven-grade-card__badge[data-grade="S"] { --riven-grade-color: #5eead4; }
+.riven-row__grade[data-grade="A"], .riven-grade-card__badge[data-grade="A"] { --riven-grade-color: #7dd3fc; }
+.riven-row__grade[data-grade="B"], .riven-grade-card__badge[data-grade="B"] { --riven-grade-color: #fbbf24; }
+.riven-row__grade[data-grade="C"], .riven-grade-card__badge[data-grade="C"] { --riven-grade-color: #fb7185; }
+.riven-row__grade[data-grade="D"], .riven-grade-card__badge[data-grade="D"] { --riven-grade-color: #94a3b8; }
+
+/* The community's own notation, "1cc 2cd -4z". Dimmer than the grade, because it is
+   the detail behind the grade rather than the headline. */
+.riven-row__notation {
+  font-size: 10px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text-accent);
+  opacity: 0.85;
+  letter-spacing: 0.01em;
+}
+
+.riven-row__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.riven-row__class,
+.riven-row__mr,
+.riven-row__score,
+.riven-row__disp {
+  font-size: 10px;
+  color: var(--text-dim);
 }
 
 .riven-row__thumb.is-broken .riven-row__icon { display: none; }
@@ -3952,7 +4003,11 @@ input[type="number"].wfm-input {
   min-width: 0;
   display: flex;
   align-items: stretch;
-  gap: 0;
+  /* A real gap, so the workspace background reads between the panes. With gap 0 the
+     panes butted together and a rounded corner looked like a notch cut out of its
+     neighbour rather than a corner of its own. */
+  gap: 8px;
+  padding: 8px;
 }
 
 .split-panes.is-empty { display: none; }
@@ -3963,8 +4018,13 @@ input[type="number"].wfm-input {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* Square, always. A rounded corner here is a hole in the middle of the window. */
-  border-radius: 0;
+  /* Each pane is its own card, with its own corners all the way round. This was
+     deliberately square before, on the reasoning that a rounded corner here is a hole
+     in the middle of the window. That only holds for a pane flush against the window
+     edge. Inset from the edge on a gap, the rounded corner is what makes the pane read
+     as a separate surface sitting inside the app, which is the intent. */
+  border-radius: 14px;
+  border: 1px solid var(--border-color);
   background: var(--bg-primary);
 }
 
@@ -3972,7 +4032,9 @@ input[type="number"].wfm-input {
   flex: 0 0 calc(var(--split-ratio, 0.5) * 100%);
 }
 
-.split-pane + .split-divider + .split-pane { border-left: 0; }
+/* The divider sits in the gap between two rounded panes, so it is drawn as a grabbable
+   strip rather than a border on one of them. */
+.split-pane + .split-divider + .split-pane { border-left: 1px solid var(--border-color); }
 
 .split-pane-head {
   flex: 0 0 auto;
@@ -3981,6 +4043,9 @@ input[type="number"].wfm-input {
   gap: 8px;
   height: 34px;
   padding: 0 6px 0 12px;
+  /* Follows the pane's own radius, otherwise the header paints square corners over the
+     top of a rounded card and the radius is only there below the title bar. */
+  border-radius: 13px 13px 0 0;
   border-bottom: 1px solid var(--border-color);
   background: rgba(255, 255, 255, 0.02);
   user-select: none;
