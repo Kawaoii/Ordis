@@ -238,6 +238,129 @@ function getRivenInventoryPath() {
 let rivenInventoryCache = null;
 let rivenInventoryWriteChain = Promise.resolve();
 
+// Warframe.market serves item art from this base. market.js keeps its own copy
+// because the renderer cannot reach into the main process; keep the two in step.
+const WFM_ASSET_CDN_BASE = 'https://warframe.market/static/assets/';
+
+/* Riven mod art.
+ *
+ * A riven is a mod, and that is the picture the game and the market show for it.
+ * Warframe.market has one mod item per weapon class rather than one per riven, so
+ * the art is per class: fetched once, then cached on disk. The path contains a
+ * content hash, so it is looked up rather than hard-coded.
+ *
+ * The seven slugs are the same set the renderer posts orders under, and they were
+ * verified against /v2/items. */
+const RIVEN_MOD_ITEM_SLUGS = {
+  rifle: 'rifle_riven_mod_veiled',
+  shotgun: 'shotgun_riven_mod_veiled',
+  pistol: 'pistol_riven_mod_veiled',
+  melee: 'melee_riven_mod_veiled',
+  kitgun: 'kitgun_riven_mod_veiled',
+  zaw: 'zaw_riven_mod_veiled',
+  archgun: 'companion_weapon_riven_mod_veiled'
+};
+const RIVEN_MOD_ICON_FILE = 'riven-mod-icons.json';
+let rivenModIconCache = null;
+
+function buildRivenIconUrl(icon) {
+  const relative = String(icon || '').trim();
+  if (!relative) return '';
+  if (/^https?:\/\//i.test(relative)) return relative;
+  if (/unknown\.(thumb\.)?png$/i.test(relative)) return '';
+  return WFM_ASSET_CDN_BASE + relative.replace(/^\/+/, '');
+}
+
+function getRivenModIconPath() {
+  return path.join(app.getPath('userData'), RIVEN_MOD_ICON_FILE);
+}
+
+/**
+ * Fill in the mod icon for every weapon class present in the inventory.
+ *
+ * Best effort by design: a missing icon leaves the weapon art in place, and the
+ * next launch tries again. Nothing here is allowed to fail a save.
+ */
+async function ensureRivenModIcons(classes) {
+  const wanted = Array.from(new Set((classes || []).map((c) => String(c || '').trim()).filter(Boolean)));
+  if (!wanted.length) return;
+
+  try {
+    if (!rivenModIconCache) {
+      const stored = await readJsonFile(getRivenModIconPath(), null);
+      rivenModIconCache = stored && typeof stored === 'object' ? stored : {};
+    }
+  } catch (err) {
+    rivenModIconCache = {};
+  }
+
+  const missing = wanted.filter((cls) => !rivenModIconCache[cls] && RIVEN_MOD_ITEM_SLUGS[cls]);
+  if (!missing.length) return;
+
+  let changed = false;
+  await Promise.all(missing.map(async (cls) => {
+    const slug = RIVEN_MOD_ITEM_SLUGS[cls];
+    if (!slug) return;
+    // Plain fetch with its own abort: the timeout helper in riven-data.js is not
+    // exported, and calling a name that is not in scope here fails silently inside
+    // the catch below, which is exactly what happened the first time.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch('https://api.warframe.market/v2/items/' + encodeURIComponent(slug), {
+        headers: wfmHeaders(),
+        signal: controller.signal
+      });
+      if (!response.ok) return;
+      const payload = await response.json();
+      const icon = payload && payload.data && payload.data.i18n && payload.data.i18n.en
+        ? payload.data.i18n.en.icon
+        : '';
+      const url = buildRivenIconUrl(icon);
+      if (url) {
+        rivenModIconCache[cls] = url;
+        changed = true;
+      }
+    } catch (err) {
+      // Offline or rate limited: the entry keeps the weapon art this time.
+    } finally {
+      clearTimeout(timeout);
+    }
+  }));
+
+  if (changed) {
+    try {
+      await writeJsonFile(getRivenModIconPath(), rivenModIconCache);
+    } catch (err) {
+      // A cache that cannot be written just means fetching it again next time.
+    }
+  }
+}
+
+/**
+ * The name the game prints for a stat, resolved from whatever text we have.
+ *
+ * Rivens scanned before this existed were saved with the OCR spelling
+ * ("Status Chanci", "Projectile Spee"), and those files are still on disk. Both
+ * fields are repaired on read, from the stat key when there is one and from the
+ * saved name when there is not, so old entries stop displaying a mangled name
+ * without needing a rescan or a delete.
+ */
+function canonicalRivenStatName(name, key) {
+  const text = String(name || '').trim();
+  if (!text) return { name: '', key: '' };
+  try {
+    const rivenData = getRivenDataModule();
+    const resolved = String(key || '').trim() || rivenData.resolveRivenStatKey(text) || '';
+    if (resolved) {
+      return { name: rivenData.rivenStatName(resolved) || text, key: resolved };
+    }
+  } catch (err) {
+    // The data module is optional at read time; the raw name is still usable.
+  }
+  return { name: text, key: String(key || '').trim() };
+}
+
 function normalizeRivenInventoryEntry(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const stats = Array.isArray(raw.stats) ? raw.stats : [];
@@ -246,11 +369,15 @@ function normalizeRivenInventoryEntry(raw) {
   const grade = raw.grade && typeof raw.grade === 'object' ? raw.grade : {};
   const cleanStats = stats
     .filter((s) => s && typeof s === 'object' && s.name)
-    .map((s) => ({
-      name: String(s.name),
-      value: Number(s.value) || 0,
-      isPositive: !!s.isPositive
-    }));
+    .map((s) => {
+      const canonical = canonicalRivenStatName(s.name, s.key);
+      return {
+        key: canonical.key,
+        name: canonical.name,
+        value: Number(s.value) || 0,
+        isPositive: !!s.isPositive
+      };
+    });
   if (!cleanStats.length) return null;
 
   return {
@@ -272,9 +399,16 @@ function normalizeRivenInventoryEntry(raw) {
     // buyer.
     rivenType: String(raw.rivenType || '').trim(),
     // Warframe.market's riven weapons list carries an icon for every weapon it
-    // knows. Weapons it does not list (most Prime variants) fall back to the
-    // class riven mod icon in the renderer.
+    // knows (419 of 420 on the list this was written against). The path is
+    // relative to their asset CDN, which is the same base market.js builds item
+    // art from; it is turned into a full URL here so the renderer does not have to
+    // know where it came from.
     icon: String(raw.icon || '').trim(),
+    iconUrl: buildRivenIconUrl(raw.icon),
+    // The riven mod's own art, which is what the game and the market show for a
+    // riven. Falls back to the weapon art in the renderer when this is empty,
+    // which is the case until the class icon has been fetched once.
+    modIconUrl: (rivenModIconCache && rivenModIconCache[String(raw.rivenType || raw.weaponClass || '').trim()]) || '',
     // Per-stat good/poor/harmless verdict, from the community sheet.
     statVerdicts: Array.isArray(raw.statVerdicts)
       ? raw.statVerdicts
@@ -305,6 +439,8 @@ async function readRivenInventory() {
   if (rivenInventoryCache) return rivenInventoryCache;
   const raw = await readJsonFile(getRivenInventoryPath(), null);
   const entries = Array.isArray(raw) ? raw : raw && Array.isArray(raw.entries) ? raw.entries : [];
+  // Resolved before normalising, because the mod art is attached during it.
+  await ensureRivenModIcons(entries.map((entry) => entry && (entry.rivenType || (entry.grade && entry.grade.weaponClass))));
   rivenInventoryCache = entries.map(normalizeRivenInventoryEntry).filter(Boolean);
   return rivenInventoryCache;
 }
@@ -329,8 +465,13 @@ function rivenStatsFingerprint(entry) {
 }
 
 async function addRivenToInventory(entry) {
-  const normalized = normalizeRivenInventoryEntry(entry);
+  let normalized = normalizeRivenInventoryEntry(entry);
   if (!normalized) return null;
+
+  // The class icon is attached during normalisation, so it has to be in the cache
+  // first. A riven saved before this existed picks it up here.
+  await ensureRivenModIcons([normalized.rivenType || normalized.weaponClass]);
+  normalized = normalizeRivenInventoryEntry(entry) || normalized;
 
   const entries = await readRivenInventory();
   const fingerprint = rivenStatsFingerprint(normalized);
@@ -394,6 +535,14 @@ let rivenOverlayCachedDisplayId = null;
 let rivenOverlayManualDisplayId = null;
 let rivenOverlayDebugDir = null;
 let rivenOverlayHideTimer = null;
+// Selection-following state. `selectedSide` is which card is lit, and the
+// signature is that plus a hash of its pixels, so an unchanged screen costs
+// nothing and a flip is picked up on the next cycle.
+let rivenOverlayWatchTimer = null;
+let rivenOverlayWatchUntil = 0;
+let rivenOverlayWatchBusy = false;
+let rivenOverlaySelectedSide = '';
+let rivenOverlayWatchSignature = '';
 const PROFILE_FETCH_TIMEOUT_MS = 15000;
 const PROFILE_REMOTE_FETCH_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const PROFILE_REMOTE_RETRY_COOLDOWN_MS = 15 * 60 * 1000;
@@ -418,21 +567,72 @@ let regionMasteryCache = null;
 let regionMasteryCacheFetchedAt = 0;
 const REGION_MASTERY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const RIVEN_OVERLAY_GRADE_THRESHOLDS = { S: 80, A: 60, B: 40, C: 20 };
-const RIVEN_OVERLAY_HIDE_DELAY_MS = 10000;
-const RIVEN_OVERLAY_LOG_POLL_INTERVAL_MS = 750;
+// How long the roll card stays up over the game. Long enough to read a stat,
+// short enough that it is not sitting there when the next screen appears.
+const RIVEN_OVERLAY_HIDE_DELAY_MS = 9000;
+
+/* Following the selection.
+ *
+ * The reroll screen stays open while the player decides, and they flip between
+ * the old riven and the new one with a keybind. The card is worth updating while
+ * that happens, the way a companion overlay does, so the screen is watched for a
+ * couple of minutes and whichever card is lit is the one shown. The cards are the
+ * same size and the same height apart, so "which one is selected" is just "which
+ * one is brighter" — measured from the pixels we already cropped, with no second
+ * read and no extra OCR. */
+const RIVEN_OVERLAY_WATCH_WINDOW_MS = 150000;
+const RIVEN_OVERLAY_WATCH_INTERVAL_MS = 850;
+// 300ms, not 750ms: the cards are on screen for as long as the player takes to
+// answer the choice prompt, and a real one took 1.5s. Half of that was being spent
+// waiting to notice. Only the new bytes of the log are read each time, so polling
+// this often costs a file read and nothing else.
+const RIVEN_OVERLAY_LOG_POLL_INTERVAL_MS = 300;
 const RIVEN_OVERLAY_LOG_TAIL_BYTES = 64 * 1024;
 const RIVEN_OVERLAY_SCAN_DELAY_MS = 500;
-const RIVEN_OVERLAY_SCAN_BURST_WINDOW_MS = 3000;
+// The cards are only on screen while the choice prompt is up, and a real reroll
+// showed the player answering it 1.5s after it appeared. The first attempt waits a
+// fifth of that, and the burst is given room for four reads so a frame caught
+// mid-animation does not end the attempt.
+const RIVEN_OVERLAY_FIRST_SCAN_DELAY_MS = 200;
+const RIVEN_OVERLAY_MAX_SCAN_ATTEMPTS = 4;
+const RIVEN_OVERLAY_SCAN_BURST_WINDOW_MS = 6000;
 const RIVEN_OVERLAY_DUPLICATE_SCAN_MS = 1500;
 const RIVEN_OVERLAY_MIN_KEYWORD_HITS = 2;
-// Measured, not guessed: the mod card occupies 804,454 337x397 in a 1920x1080 frame
-// (located by template-matching the card crop against the full screenshot). The
-// previous guess of x:0.4 y:0.25 w:0.35 h:0.5 covered y 270-810 while the card runs
-// to y 851, so the last stat line was cropped off and nothing ever OCR'd. These
-// values add ~20px of margin on each side and scale with the frame.
-const RIVEN_OVERLAY_CROP = { x: 0.4083, y: 0.4019, width: 0.1964, height: 0.4046 };
-const RIVEN_OVERLAY_CROP_MIN_WIDTH = 900;
-const RIVEN_OVERLAY_CROP_MAX_WIDTH = 1400;
+// Measured on a real 1920x1080 reroll frame, by locating the two cards in the
+// screenshot rather than guessing at them.
+//
+// The screen shows the riven you already have and the roll side by side, and both
+// cards' text sits at the same height, so reading one region as a single stream
+// merged them: the weapon name came out as "Ocucor Visilis Ocucor Sci-zetides" and
+// the stat set was whichever lines happened to survive. Each card is cropped and
+// read on its own instead.
+//
+// Left card  x 0.275..0.410, right card x 0.410..0.578, both y 0.420..0.775. The gap
+// between the cards is empty from 0.390 to 0.430, so the split at 0.410 sits in the
+// middle of a 0.04-wide margin rather than on an edge. The old single crop
+// (x 0.408..0.605) happened to clear the left card on this frame, which is why the
+// merge was only ever visible in the diagnostic capture, but it left the two cards
+// one bad pixel apart.
+const RIVEN_OVERLAY_CARDS = {
+  previous: { x: 0.275, y: 0.42, width: 0.135, height: 0.355 },
+  current: { x: 0.41, y: 0.42, width: 0.168, height: 0.355 }
+};
+// Each card is only ~260-320px wide on a 1080p frame, so it is worth roughly 3.4x
+// before OCR: the name and the three stat lines are 10-14px tall as drawn.
+const RIVEN_OVERLAY_CARD_UPSCALE = 3.4;
+const RIVEN_OVERLAY_CARD_MIN_WIDTH = 900;
+const RIVEN_OVERLAY_CARD_MAX_WIDTH = 1400;
+
+/* Only the bottom half of a card carries text: the name, the three stat lines and
+ * the mastery readout. The picture above them is most of the pixels and none of
+ * the data, and it is what drags page segmentation into inventing words.
+ *
+ * Measured on a real frame: reading the band instead of the whole card returned the
+ * same three stats on both cards, in roughly half the time (649ms against 1516ms
+ * on the left card). Fractions are of the card, not the screen: the name sits at
+ * 0.55-0.63 of the card's height and the last stat line ends at 0.87, so 0.50 to
+ * 0.93 is the band with a little air either side. */
+const RIVEN_OVERLAY_CARD_TEXT_BAND = { y: 0.5, height: 0.43 };
 
 // Words too common in the Warframe UI to be evidence of a riven stat panel: they
 // appear on unrelated screens and would make the gate pass on anything.
@@ -627,6 +827,367 @@ async function clearRelicOverlayWindow(message) {
   }
 }
 
+/* Riven overlay.
+ *
+ * The reroll screen is a full-screen game view, so a grade shown inside the app is
+ * a grade nobody is looking at. This is the same arrangement as the relic overlay:
+ * a click-through, always-on-top transparent window over the whole display, fed
+ * the scan result and hidden again on a timer.
+ *
+ * The card sits centre-bottom rather than over the two riven cards themselves,
+ * which occupy the middle of the screen: the player is comparing those, and
+ * covering them would defeat the purpose. */
+async function ensureRivenOverlayWindow(display) {
+  const targetDisplay = display || screen.getPrimaryDisplay();
+  const bounds = targetDisplay.bounds || { x: 0, y: 0, width: 1280, height: 720 };
+
+  if (rivenOverlayWindow && !rivenOverlayWindow.isDestroyed()) {
+    rivenOverlayWindow.setBounds(bounds);
+    return rivenOverlayWindow;
+  }
+
+  rivenOverlayWindow = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    show: false,
+    focusable: false,
+    hasShadow: false,
+    alwaysOnTop: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false
+    }
+  });
+
+  rivenOverlayWindow.setIgnoreMouseEvents(true);
+  rivenOverlayWindow.setAlwaysOnTop(true, 'screen-saver');
+  rivenOverlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  try {
+    // Without this the overlay is part of the next capture, and the app reads its
+    // own grade card as riven stats.
+    rivenOverlayWindow.setContentProtection(true);
+  } catch (err) {
+    // Best effort.
+  }
+  rivenOverlayWindow.on('closed', () => {
+    rivenOverlayWindow = null;
+  });
+
+  await rivenOverlayWindow.loadFile(path.join(__dirname, 'riven-overlay.html'));
+  return rivenOverlayWindow;
+}
+
+/**
+ * Reduce a scan result to what the overlay draws. Kept separate from the drawing
+ * so nothing untrusted (raw OCR text, a stat name off the screen) is ever turned
+ * into markup by string concatenation.
+ */
+function buildRivenOverlayModel(payload) {
+  const source = payload || {};
+  const grade = source.grade || null;
+  const parsed = source.parsed || {};
+
+  const stats = Array.isArray(parsed.stats) ? parsed.stats.slice(0, 6).map((stat) => ({
+    name: String(stat.name == null ? '' : stat.name).slice(0, 40),
+    value: Number(stat.value),
+    isPositive: !!stat.isPositive
+  })) : [];
+
+  const previous = source.previousRoll || null;
+  const previousStats = previous && Array.isArray(previous.stats)
+    ? previous.stats.slice(0, 6).map((stat) => ({
+        name: String(stat.name == null ? '' : stat.name).slice(0, 40),
+        value: Number(stat.value),
+        isPositive: !!stat.isPositive
+      }))
+    : [];
+
+  return {
+    success: source.success === true,
+    pending: source.pending === true,
+    // Which card this read came from, so the overlay can say whether it is showing
+    // the new roll or the riven being replaced. Following the selection is the
+    // whole point of the watch loop.
+    side: source.side === 'previous' ? 'previous' : 'current',
+    error: String(source.error == null ? '' : source.error).slice(0, 240),
+    weaponName: String(parsed.weaponName == null ? '' : parsed.weaponName).slice(0, 60),
+    rivenName: parsed.rivenName ? String(parsed.rivenName).slice(0, 60) : '',
+    grade: grade ? String(grade.grade == null ? '' : grade.grade).slice(0, 4) : '',
+    gradeLabel: grade ? String(grade.gradeLabel == null ? '' : grade.gradeLabel).slice(0, 40) : '',
+    score: grade && grade.score != null ? Number(grade.score) : null,
+    perfectness: grade && grade.perfectnessKnown && Number.isFinite(Number(grade.perfectness))
+      ? Number(grade.perfectness)
+      : null,
+    reasons: Array.isArray(grade && grade.reasons) ? grade.reasons.slice(0, 3).map(String) : [],
+    // Per-stat tiers and verdicts, so the overlay can mark a good stat with a
+    // symbol that means something instead of only showing a sign.
+    verdicts: Array.isArray(source.statTiers)
+      ? source.statTiers.slice(0, 8).map((t) => ({
+          name: String(t.name == null ? '' : t.name).slice(0, 40),
+          verdict: String(t.verdict == null ? 'unknown' : t.verdict).slice(0, 12),
+          tier: String(t.tier == null ? '?' : t.tier).slice(0, 2),
+          ratio: t.ratio == null ? null : Number(t.ratio)
+        }))
+      : [],
+    stats: stats,
+    hasPrevious: !!previous,
+    previousPerfectness: previous && previous.perfectness != null ? Number(previous.perfectness) : null,
+    previousVerdicts: Array.isArray(source.previousStatVerdicts)
+      ? source.previousStatVerdicts
+          .filter((v) => v && v.name)
+          .slice(0, 8)
+          .map((v) => ({ name: String(v.name).slice(0, 40), verdict: String(v.verdict || 'unknown').slice(0, 12) }))
+      : [],
+    previousStats: previousStats
+  };
+}
+
+async function showRivenOverlay(result, display) {
+  if (!rivenOverlayEnabled) return { ok: false, reason: 'disabled' };
+  const model = buildRivenOverlayModel(result);
+  // A failed read is worth showing too: silence over the game is
+  // indistinguishable from the feature not working.
+  if (!model.pending && !model.success && !model.error) return { ok: false, reason: 'nothing-to-show' };
+  // The watch is following a selection; the roll it replaces is the other card.
+  if (model.success && !result.previousRoll && model.side === 'current' && rivenOverlaySelectedSide === 'current') {
+    model.hasPrevious = false;
+  }
+
+  try {
+    const overlay = await ensureRivenOverlayWindow(display || getDisplayForRelicOverlay());
+    if (!overlay || overlay.isDestroyed()) return { ok: false, reason: 'no-window' };
+
+    await overlay.webContents.executeJavaScript(
+      'window.renderRivenOverlay && window.renderRivenOverlay(' + sanitizeForInlineScript(model) + ');',
+      true
+    );
+    overlay.showInactive();
+
+    if (rivenOverlayHideTimer) clearTimeout(rivenOverlayHideTimer);
+    rivenOverlayHideTimer = setTimeout(() => {
+      rivenOverlayHideTimer = null;
+      if (rivenOverlayWindow && !rivenOverlayWindow.isDestroyed()) rivenOverlayWindow.hide();
+    }, RIVEN_OVERLAY_HIDE_DELAY_MS);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: err && err.message ? err.message : 'overlay failed' };
+  }
+}
+
+async function hideRivenOverlay() {
+  if (rivenOverlayHideTimer) {
+    clearTimeout(rivenOverlayHideTimer);
+    rivenOverlayHideTimer = null;
+  }
+  if (rivenOverlayWindow && !rivenOverlayWindow.isDestroyed()) rivenOverlayWindow.hide();
+}
+
+/**
+ * Mean brightness of a fraction of a cropped region, 0..1.
+ *
+ * Only called on the two fixed strips below. This used to measure the whole card,
+ * which was wrong: the riven mod's picture rotates, so the art's own brightness
+ * changes second to second and the overlay could decide the selection had flipped
+ * when nothing had. Measured on a real pair of cards, the picture separates the two
+ * cards by 1.4x while the strip along the bottom edge separates them by 10.7x, so
+ * the art is not part of the test at all.
+ */
+function measureRegionLuminance(image, x0, y0, x1, y1) {
+  if (!image || !image.toBitmap || !image.getSize) return 0;
+  let bitmap;
+  let size;
+  try {
+    bitmap = image.toBitmap();
+    size = image.getSize();
+  } catch (err) {
+    return 0;
+  }
+  if (!bitmap || !bitmap.length) return 0;
+
+  const width = Math.max(1, Number(size && size.width) || Math.round(bitmap.length / 4));
+  const height = Math.max(1, Number(size && size.height) || 1);
+  const from = Math.max(0, Math.round(width * (x0 == null ? 0 : x0)));
+  const to = Math.min(width, Math.round(width * (x1 == null ? 1 : x1)));
+  const top = Math.max(0, Math.round(height * (y0 == null ? 0 : y0)));
+  const bottom = Math.min(height, Math.round(height * (y1 == null ? 1 : y1)));
+  if (to <= from || bottom <= top) return 0;
+
+  let sum = 0;
+  let count = 0;
+  for (let y = top; y < bottom; y += 2) {
+    for (let x = from; x < to; x += 2) {
+      const index = (y * width + x) * 4;
+      if (index + 2 >= bitmap.length) continue;
+      sum += 0.299 * bitmap[index + 2] + 0.587 * bitmap[index + 1] + 0.114 * bitmap[index];
+      count++;
+    }
+  }
+  return count ? sum / count / 255 : 0;
+}
+
+/* The two fixed strips used to tell the cards apart, and their weights.
+ *
+ * The bottom strip is the rank and mastery readout, which lights up on the card
+ * that is selected; the top strip is the frame above the picture. Neither contains
+ * the rotating art, so neither moves on its own. The bottom strip is weighted
+ * heavily because it is by far the stronger signal. */
+const RIVEN_CARD_SELECTION_STRIPS = [
+  { x0: 0, y0: 0.92, x1: 1, y1: 1, weight: 3 },
+  { x0: 0, y0: 0, x1: 1, y1: 0.06, weight: 1 }
+];
+
+/**
+ * Which card is selected: 'previous', 'current', or '' when it cannot be told.
+ *
+ * Hysteresis matters as much as the measurement. A selection only changes when the
+ * player flips, so the challenger has to beat the card already shown by a clear
+ * margin; otherwise a frame that happens to be a shade brighter swaps the answer
+ * and the score appears to change by itself.
+ */
+function pickSelectedRivenCard(regions, currentSide) {
+  const score = (region) => RIVEN_CARD_SELECTION_STRIPS.reduce((total, strip) => {
+    return total + strip.weight * measureRegionLuminance(region.image, strip.x0, strip.y0, strip.x1, strip.y1);
+  }, 0);
+
+  const previous = score(regions.previous);
+  const current = score(regions.current);
+  if (!previous && !current) return '';
+
+  const winner = current >= previous ? 'current' : 'previous';
+  const loser = winner === 'current' ? previous : current;
+  const leader = winner === 'current' ? current : previous;
+
+  if (currentSide && currentSide !== winner) {
+    // Stay on what is already shown unless the other card is clearly brighter.
+    if (!(leader > loser * 1.15)) return currentSide;
+  }
+  return winner;
+}
+
+/**
+ * One pass of "keep the overlay in step with the selection".
+ *
+ * Reads only the lit card, so flipping between the two rivens updates what the
+ * overlay says without a second read of the other one. Nothing is filed: this is
+ * the live view, and the roll is saved by the burst that runs on the reroll
+ * itself, not by every flip the player makes while deciding.
+ */
+async function runRivenWatchCycle() {
+  if (!rivenOverlayEnabled || rivenOverlayWatchBusy) return;
+  if (Date.now() >= rivenOverlayWatchUntil) {
+    stopRivenOverlayWatch();
+    return;
+  }
+  rivenOverlayWatchBusy = true;
+
+  try {
+    let capture = null;
+    const candidates = getRivenCandidateDisplayIds();
+    for (const displayId of candidates) {
+      try {
+        capture = await captureDisplayById(displayId);
+      } catch (err) {
+        capture = null;
+      }
+      if (capture) {
+        rivenOverlayCachedDisplayId = capture.display && capture.display.id != null
+          ? capture.display.id
+          : rivenOverlayCachedDisplayId;
+        break;
+      }
+    }
+    if (!capture) return;
+
+    const regions = {
+      previous: createRivenOcrRegion(capture.image, RIVEN_OVERLAY_CARDS.previous),
+      current: createRivenOcrRegion(capture.image, RIVEN_OVERLAY_CARDS.current)
+    };
+    const side = pickSelectedRivenCard(regions, rivenOverlaySelectedSide);
+    if (!side) return;
+    const region = regions[side];
+    const signature = side + ':' + crypto.createHash('sha1').update(region.image.toBitmap()).digest('hex');
+    if (signature === rivenOverlayWatchSignature) return;
+    rivenOverlayWatchSignature = signature;
+    rivenOverlaySelectedSide = side;
+
+    const read = await recognizeRivenRegion(capture, side);
+    const card = read.cards[side];
+    if (!card) return;
+    // An unverified read has empty text on purpose. Holding off here is the whole
+    // point: a frame the engines could not agree on must not become a grade.
+    if (!card.agreed || !String(card.text || '').trim()) return;
+
+    const success = {
+      ok: true,
+      text: card.text,
+      lines: card.lines,
+      ocrEngine: card.engine || '',
+      ocrEngines: card.engines || [],
+      ocrCorroborating: card.corroborating || 0,
+      ocrVerified: !!card.verified,
+      previousText: side === 'current' ? read.cards.previous && read.cards.previous.text : '',
+      previousLines: side === 'current' ? read.cards.previous && read.cards.previous.lines : [],
+      previousOcrEngine: side === 'current' && read.cards.previous ? (read.cards.previous.engine || '') : '',
+      imageSize: capture.imageSize,
+      displayBounds: capture.display && capture.display.bounds ? capture.display.bounds : null,
+      displayId: capture.display && capture.display.id != null ? capture.display.id : '',
+      capturedAt: read.now
+    };
+
+    const graded = await gradeRivenScan(success, { file: false, watch: true });
+    if (graded && graded.success) {
+      graded.side = side;
+      await showRivenOverlay(graded, capture.display);
+    }
+  } catch (err) {
+    // A cycle that fails is simply skipped; the next one is 850ms away.
+  } finally {
+    rivenOverlayWatchBusy = false;
+  }
+}
+
+function startRivenOverlayWatch() {
+  stopRivenOverlayWatch();
+  rivenOverlayWatchUntil = Date.now() + RIVEN_OVERLAY_WATCH_WINDOW_MS;
+  rivenOverlayWatchSignature = '';
+  rivenOverlaySelectedSide = '';
+
+  const tick = async () => {
+    if (!rivenOverlayEnabled || Date.now() >= rivenOverlayWatchUntil) {
+      stopRivenOverlayWatch();
+      return;
+    }
+    await runRivenWatchCycle();
+    rivenOverlayWatchTimer = setTimeout(tick, RIVEN_OVERLAY_WATCH_INTERVAL_MS);
+  };
+
+  rivenOverlayWatchTimer = setTimeout(tick, 250);
+}
+
+function stopRivenOverlayWatch() {
+  if (rivenOverlayWatchTimer) {
+    clearTimeout(rivenOverlayWatchTimer);
+    rivenOverlayWatchTimer = null;
+  }
+  rivenOverlayWatchUntil = 0;
+  rivenOverlayWatchBusy = false;
+  rivenOverlayWatchSignature = '';
+  rivenOverlaySelectedSide = '';
+}
+
 function getRelicOverlayTextSignature(text) {
   return String(text || '')
     .toLowerCase()
@@ -714,7 +1275,11 @@ function isRelicOverlayRewardLogText(text) {
 }
 
 function isRelicOverlayRewardEndLogText(text) {
-  return /(?:Relic timer closed|MatchingService::EndSession)/i.test(String(text || ''));
+  /* Not "Relic timer closed". On a real run that is written 0.36s after the
+   * rewards are initialised, while the reward screen itself stays up for another
+   * 15s, so treating it as the end took the overlay away a second after it
+   * appeared. The screen shutting down is the actual end. */
+  return /(?:Relic reward screen shut down|MatchingService::EndSession)/i.test(String(text || ''));
 }
 
 function getRelicOverlayScanDelay() {
@@ -815,6 +1380,23 @@ async function pollRelicOverlayLog() {
     const chunk = await readRelicOverlayLogChunk(currentPath, start, logInfo.size);
     relicOverlayLogOffset = logInfo.size;
 
+    /* End is tested first, and the end pattern has to be narrow because of it.
+     *
+     * A real fissure run writes:
+     *   4267.551  ProjectionRewardChoice.lua: Relic rewards initialized
+     *   4267.911  ProjectionsCountdown.lua: Relic timer closed
+     *   4282.911  ProjectionsCountdown.lua: Relic timer closed
+     *   4282.912  ProjectionRewardChoice.lua: Relic reward screen shut down
+     *
+     * The first two land inside one 750ms poll. "Relic timer closed" used to be
+     * treated as the end, so that poll cleared the overlay on the very chunk that
+     * should have raised it and the feature never fired. The reward countdown
+     * ending is not the screen closing: the screen stays up for another 15
+     * seconds, which is exactly how long the overlay needs to be useful.
+     *
+     * The last line is the real end, and it must keep winning over the start
+     * pattern it also matches ("ProjectionRewardChoice" appears in it), hence end
+     * first. */
     if (isRelicOverlayRewardEndLogText(chunk)) {
       relicOverlayBurstUntil = 0;
       relicOverlayLastHash = '';
@@ -1162,21 +1744,25 @@ function isLikelyWarframeRivenContent(text) {
   return (keywords >= 1 && keywords + values >= 3) || values >= 3;
 }
 
-function createRivenOcrRegion(image) {
+function createRivenOcrRegion(image, card) {
+  const region = card || RIVEN_OVERLAY_CARDS.current;
   const size = image && image.getSize ? image.getSize() : { width: 0, height: 0 };
   const width = Math.max(1, Number(size.width) || 1);
   const height = Math.max(1, Number(size.height) || 1);
   const crop = {
-    x: Math.max(0, Math.round(width * RIVEN_OVERLAY_CROP.x)),
-    y: Math.max(0, Math.round(height * RIVEN_OVERLAY_CROP.y)),
-    width: Math.max(1, Math.round(width * RIVEN_OVERLAY_CROP.width)),
-    height: Math.max(1, Math.round(height * RIVEN_OVERLAY_CROP.height))
+    x: Math.max(0, Math.round(width * region.x)),
+    y: Math.max(0, Math.round(height * region.y)),
+    width: Math.max(1, Math.round(width * region.width)),
+    height: Math.max(1, Math.round(height * region.height))
   };
 
   if (crop.x + crop.width > width) crop.width = width - crop.x;
   if (crop.y + crop.height > height) crop.height = height - crop.y;
 
-  const targetWidth = Math.min(RIVEN_OVERLAY_CROP_MAX_WIDTH, Math.max(RIVEN_OVERLAY_CROP_MIN_WIDTH, crop.width * 1.7));
+  const targetWidth = Math.min(
+    RIVEN_OVERLAY_CARD_MAX_WIDTH,
+    Math.max(RIVEN_OVERLAY_CARD_MIN_WIDTH, crop.width * RIVEN_OVERLAY_CARD_UPSCALE)
+  );
   const scale = targetWidth / crop.width;
   const targetHeight = Math.max(1, Math.round(crop.height * scale));
   const prepared = image
@@ -1192,6 +1778,31 @@ function createRivenOcrRegion(image) {
     offsetX: crop.x,
     offsetY: crop.y,
     scale
+  };
+}
+
+/**
+ * The readable part of a card, cropped from the card crop.
+ *
+ * Kept at the same upscale as the card it came from: only the vertical extent is
+ * cut, so the glyphs are the same size that was measured working. The full card is
+ * still used for deciding which one is selected, because the selection glow is on
+ * the card's frame and not in the text.
+ */
+function createRivenTextRegion(cardRegion) {
+  const image = cardRegion && cardRegion.image;
+  const size = image && image.getSize ? image.getSize() : { width: 0, height: 0 };
+  const width = Math.max(1, Number(size.width) || 1);
+  const height = Math.max(1, Number(size.height) || 1);
+  const y = Math.max(0, Math.min(height - 1, Math.round(height * RIVEN_OVERLAY_CARD_TEXT_BAND.y)));
+  const bandHeight = Math.max(1, Math.min(height - y, Math.round(height * RIVEN_OVERLAY_CARD_TEXT_BAND.height)));
+  if (bandHeight >= height) return cardRegion;
+
+  return {
+    image: image.crop({ x: 0, y: y, width: width, height: bandHeight }),
+    offsetX: cardRegion.offsetX,
+    offsetY: cardRegion.offsetY + Math.round(y * cardRegion.scale),
+    scale: cardRegion.scale
   };
 }
 
@@ -1251,28 +1862,281 @@ function getRivenCandidateDisplayIds() {
   return candidates;
 }
 
-async function recognizeRivenRegion(capture) {
-  const ocrRegion = createRivenOcrRegion(capture.image);
-  const imageHash = crypto.createHash('sha1').update(ocrRegion.image.toBitmap()).digest('hex');
-  const now = Date.now();
+/* Windows ships its own OCR engine (Windows.Media.Ocr) and it is both faster and more
+ * accurate than Tesseract on the lit riven card, so it is tried first and Tesseract
+ * stays as the fallback. Measured over 48 captured frames, the two agreed on 42; every
+ * one of the 6 disagreements was a frame the player would call unreadable anyway (a
+ * mid-reroll motion blur, or the dimmed unselected card, which this engine cannot read
+ * and Tesseract mostly can). That split is the reason both are kept.
+ *
+ * It is reached through @napi-rs/system-ocr, a native binding, rather than by spawning
+ * powershell.exe against a .ps1. Same engine, but it takes the PNG buffer directly and
+ * returns in roughly 100ms instead of paying a process launch on every card, which is
+ * what lets the 850ms watch loop keep up with a reroll.
+ *
+ * The language is pinned to English rather than left to the default. The game decides
+ * the text, and the engine's TryCreateFromUserProfileLanguages() would follow the
+ * Windows display language instead, which read an English card badly on a German
+ * desktop. */
+const RIVEN_WIN_OCR_LANGUAGE = 'en-US';
+// A stat line always carries a number next to a sign, percent or multiplier. Used only
+// to decide whether a read is worth trusting, never to grade: grading is the parser's
+// job, and it is the one place a wrong number becomes a confident wrong answer.
+const RIVEN_STAT_LINE_HINT = /[+\-x×]\s*\d|\d\s*%|\d\s*[x×]/i;
+const RIVEN_WIN_OCR_MIN_LINES = 2;
 
-  if (imageHash === rivenOverlayLastHash && (now - rivenOverlayLastHashAt) < RIVEN_OVERLAY_DUPLICATE_SCAN_MS) {
-    return { duplicate: true, imageHash, now };
+let systemOcrModule = null;
+let winOcrBroken = false;
+
+function getSystemOcrModule() {
+  // Required on first use for the same reason tesseract is: it is a native addon and
+  // nothing on the startup path needs it.
+  if (!systemOcrModule) systemOcrModule = require('@napi-rs/system-ocr');
+  return systemOcrModule;
+}
+
+function countStatLikeLines(text) {
+  let count = 0;
+  for (const line of String(text || '').split(/\r?\n/)) {
+    if (RIVEN_STAT_LINE_HINT.test(line)) count++;
+  }
+  return count;
+}
+
+/**
+ * Read one riven card with the Windows OCR engine.
+ *
+ * Returns the recognised lines, or null when this engine cannot be used, so the caller
+ * falls back to Tesseract. A failure here is never a scan failure.
+ */
+async function windowsOcrLines(png) {
+  if (process.platform !== 'win32' || winOcrBroken) return null;
+
+  try {
+    const result = await getSystemOcrModule().recognize(png, undefined, [RIVEN_WIN_OCR_LANGUAGE]);
+    const raw = (result && result.lines ? result.lines : []).map((line) => ({
+      text: String(line.text || '').trim(),
+      // Normalised 0..1 boxes, kept because they are what a later pass needs to tell
+      // the weapon name from the stat block without re-cropping by hand.
+      box: line.boundingBox || null
+    })).filter((line) => line.text);
+
+    if (countStatLikeLines(raw.map((line) => line.text).join('\n')) < RIVEN_WIN_OCR_MIN_LINES) {
+      return null;
+    }
+    return raw;
+  } catch (err) {
+    // A missing language pack is the one failure that will never fix itself, so it is
+    // worth remembering; anything else is treated as a bad frame and retried.
+    if (err && /lang/i.test(String(err.message || ''))) winOcrBroken = true;
+    return null;
+  }
+}
+
+/**
+ * Reduce one card's parsed stats to a comparable string.
+ *
+ * Two engines reading the same pixels will rarely agree on the raw text, so agreement
+ * is judged on the numbers that actually matter: the same stats, with the same values
+ * and signs. Names are resolved to their canonical keys first so "Damage to Infested"
+ * and "Damage to Infectcd" can still count as the same stat, and values are rounded so
+ * float noise is not treated as a disagreement.
+ */
+function rivenStatFingerprint(parsed) {
+  const stats = parsed && Array.isArray(parsed.stats) ? parsed.stats : [];
+  return stats
+    .map((stat) => {
+      let key = '';
+      try {
+        key = getRivenDataModule().resolveRivenStatKey(stat.name) || String(stat.name || '').toLowerCase();
+      } catch (err) {
+        key = String(stat.name || '').toLowerCase();
+      }
+      return key + (stat.isPositive ? '+' : '-') + (Math.round(Number(stat.value) * 10) / 10);
+    })
+    .sort()
+    .join('|');
+}
+
+/* A riven carries two or three bonuses and at most one curse. One resolved stat is not
+ * enough to grade from: a single misread digit on a single line would then be presented
+ * as the whole result. */
+const RIVEN_MIN_STATS_FOR_GRADE = 2;
+
+/**
+ * Decide what a card's worth of engine reads actually establishes.
+ *
+ * Returns the read to grade from when the engines agree, and otherwise reports the
+ * disagreement rather than picking a winner. This is the whole point: a single OCR read
+ * of a 10px-tall line is a guess, and a guess presented as a grade is the one failure
+ * this app must never have. When the engines differ there is no correct answer to
+ * choose, so the honest result is "not verified yet" and the next frame gets another
+ * go.
+ */
+function reconcileRivenReads(reads) {
+  const usable = (reads || []).filter((read) => read && read.parsed && read.parsed.stats &&
+    read.parsed.stats.length >= RIVEN_MIN_STATS_FOR_GRADE);
+  if (!usable.length) {
+    return { agreed: false, reason: 'no-engine-read-enough-stats', reads: reads || [] };
   }
 
-  rivenOverlayLastHash = imageHash;
-  rivenOverlayLastHashAt = now;
+  const prints = new Map();
+  for (const read of usable) {
+    const print = rivenStatFingerprint(read.parsed);
+    if (!prints.has(print)) prints.set(print, []);
+    prints.get(print).push(read);
+  }
 
-  const worker = await getOcrWorker();
-  const result = await worker.recognize(ocrRegion.image.toPNG(), {
-    tessedit_pageseg_mode: getOcrModule().PSM.SINGLE_BLOCK,
-    preserve_interword_spaces: '1'
-  });
-  const data = result && result.data ? result.data : {};
-  const lines = transformOcrLines(extractOcrLines(data), ocrRegion);
-  const text = String(data.text || lines.map((line) => line.text).join('\n'));
+  if (prints.size > 1) {
+    return { agreed: false, reason: 'engines-disagree', reads: reads || [], variants: prints.size };
+  }
 
-  return { duplicate: false, imageHash, now, text, lines };
+  const winners = [...prints.values()][0];
+  return {
+    agreed: true,
+    read: winners[0],
+    // Recorded for the report so a disputed value can be argued about with evidence.
+    engines: winners.map((read) => read.engine),
+    corroborating: winners.length,
+    /* "Agreed" and "verified" are not the same thing, and conflating them is how a
+     * single unread check would end up wearing the same badge as a confirmed one.
+     *
+     * A lone engine does happen legitimately: the Windows engine cannot read the
+     * dimmed unselected card, so the previous roll is Tesseract-only and there is
+     * nobody to check it against. That read is still worth showing - it is the diff -
+     * but it is one source, and the overlay says so rather than implying a second
+     * opinion that never happened. */
+    verified: winners.length > 1
+  };
+}
+
+async function recognizeRivenRegion(capture, only) {
+  // `only` reads a single card. The watch loop uses it to follow the selection:
+  // the card that is not lit does not need reading twice.
+  const wanted = only === 'previous' || only === 'current'
+    ? { [only]: RIVEN_OVERLAY_CARDS[only] }
+    : { previous: RIVEN_OVERLAY_CARDS.previous, current: RIVEN_OVERLAY_CARDS.current };
+  const regions = {};
+  for (const [side, card] of Object.entries(wanted)) {
+    regions[side] = createRivenOcrRegion(capture.image, card);
+  }
+  const parts = Object.values(regions).map((region) => region.image.toBitmap());
+  // Both cards go into the hash when both are read: a new roll appearing next to
+  // an unchanged previous roll is a different screen, and treating it as the same
+  // frame made the scan look like a duplicate.
+  const imageHash = crypto.createHash('sha1');
+  for (const part of parts) imageHash.update(part);
+  const hash = imageHash.digest('hex');
+  const now = Date.now();
+
+  if (!only && hash === rivenOverlayLastHash && (now - rivenOverlayLastHashAt) < RIVEN_OVERLAY_DUPLICATE_SCAN_MS) {
+    return { duplicate: true, imageHash: hash, now };
+  }
+
+  if (!only) {
+    rivenOverlayLastHash = hash;
+    rivenOverlayLastHashAt = now;
+  }
+
+  // SINGLE_COLUMN, not SINGLE_BLOCK: a card is one centred column of lines under a
+  // picture, and SINGLE_BLOCK pulls the card art and the button below it into the
+  // same block, which is where the junk name candidates came from.
+  //
+  // The worker is fetched inside the fallback, not here: loading it costs ~830ms and
+  // the Windows engine is meant to answer the common case without it at all.
+  const readWithTesseract = async (region) => {
+    const worker = await getOcrWorker();
+    const result = await worker.recognize(region.image.toPNG(), {
+      tessedit_pageseg_mode: getOcrModule().PSM.SINGLE_COLUMN,
+      preserve_interword_spaces: '1'
+    });
+    const data = result && result.data ? result.data : {};
+    const lines = transformOcrLines(extractOcrLines(data), region);
+    return {
+      text: String(data.text || lines.map((line) => line.text).join('\n')),
+      lines: lines,
+      engine: 'tesseract'
+    };
+  };
+
+  const readWithWindows = async (region) => {
+    const winLines = await windowsOcrLines(region.image.toPNG());
+    if (!winLines) return null;
+    return {
+      text: winLines.map((line) => line.text).join('\n'),
+      lines: winLines,
+      engine: 'windows'
+    };
+  };
+
+  /* Every card is read by both engines, always, and the two are then made to agree.
+   *
+   * Running only one engine and trusting it is what made this feature feel unreliable:
+   * a misread digit had no way of being caught. The Windows engine cannot read the
+   * dimmed card and Tesseract mostly can, so the two also cover each other's blind
+   * spot. When they do not agree, nothing is graded - see reconcileRivenReads. */
+  const readCard = async (cardRegion) => {
+    // The text band is cut here and only here. The caller hands over the whole card,
+    // because both engines read the same band and cutting it twice leaves OCR a sliver
+    // of the card that neither of them can read.
+    const region = createRivenTextRegion(cardRegion);
+    const png = region.image.toPNG();
+
+    const [winRead, tessRead] = await Promise.all([
+      readWithWindows(region),
+      // Tesseract is allowed to be missing: it is the second opinion, and on a machine
+      // where only one engine works a single clean read is better than no read at all.
+      readWithTesseract(region).catch(() => null)
+    ]);
+
+    const reads = [winRead, tessRead].filter(Boolean).map((read) => {
+      let parsed = null;
+      try {
+        parsed = getRivenParserModule().parseRivenOcr(read.text);
+      } catch (err) {
+        parsed = null;
+      }
+      return Object.assign({}, read, { parsed: parsed });
+    });
+
+    const verdict = reconcileRivenReads(reads);
+    return {
+      region: region,
+      reads: reads,
+      agreed: verdict.agreed,
+      reason: verdict.reason,
+      variants: verdict.variants || 0,
+      // The graded text is the agreed one, or empty when nothing was verified. An empty
+      // text here is what makes the caller hold off rather than show a wrong number.
+      text: verdict.agreed ? verdict.read.text : '',
+      lines: verdict.agreed ? verdict.read.lines : [],
+      engine: verdict.agreed ? verdict.read.engine : '',
+      engines: verdict.engines || [],
+      corroborating: verdict.corroborating || 0,
+      verified: !!(verdict.agreed && verdict.verified)
+    };
+  };
+
+  const cards = {};
+  for (const side of Object.keys(regions)) {
+    cards[side] = await readCard(regions[side]);
+  }
+
+  // Off unless the environment asks for it. Reading the cards is guesswork until
+  // it can be replayed against the exact pixels the game drew, and a screenshot in
+  // a transcript is both lossy and enormous.
+  const dumpDir = String(process.env.ORDIS_RIVEN_CAPTURE_DIR || '').trim();
+  if (dumpDir && !only) {
+    try {
+      await fs.mkdir(dumpDir, { recursive: true });
+      await Promise.all(Object.keys(regions).map((side) =>
+        fs.writeFile(path.join(dumpDir, now.toString() + '-' + side + '.png'), regions[side].image.toPNG())));
+    } catch (err) {
+      // A failed dump must never fail a scan.
+    }
+  }
+
+  return { duplicate: false, imageHash: hash, now, cards };
 }
 
 async function scanRivenOverlayOnce() {
@@ -1280,7 +2144,18 @@ async function scanRivenOverlayOnce() {
   rivenOverlayScanning = true;
   rivenOverlayLastScanAt = Date.now();
 
-  const diag = { displaysTried: 0, capturesFailed: 0, ocrRuns: 0, duplicates: 0, keywordHits: 0, valueHits: 0, bestText: '' };
+  const diag = {
+    displaysTried: 0,
+    capturesFailed: 0,
+    ocrRuns: 0,
+    duplicates: 0,
+    keywordHits: 0,
+    valueHits: 0,
+    // Frames the engines could not agree on. Non-zero here is normal during a reroll
+    // and is the reason a grade can be late rather than wrong.
+    unverified: 0,
+    bestText: ''
+  };
 
   try {
     const candidateIds = getRivenCandidateDisplayIds();
@@ -1310,15 +2185,31 @@ async function scanRivenOverlayOnce() {
       }
 
       diag.ocrRuns += 1;
-      if (String(recognition.text).length > diag.bestText.length) diag.bestText = String(recognition.text);
-      const hits = countRivenKeywordHits(recognition.text);
+
+      // The gate looks at both cards together: the left one is the riven being
+      // replaced and the right one is the roll, and either can be the only one
+      // that reads cleanly on a given frame.
+      //
+      // It reads every engine's raw text, not the agreed text, because "this is not a
+      // riven screen" and "this is a riven screen the engines could not agree on" are
+      // different failures and the diagnostics have to be able to tell them apart.
+      const gateText = (card) => (card && card.reads ? card.reads : [])
+        .map((r) => r.text)
+        .filter((part) => String(part || '').trim())
+        .join('\n');
+      const scannedText = [gateText(recognition.cards.previous), gateText(recognition.cards.current)]
+        .filter((part) => String(part || '').trim())
+        .join('\n');
+      if (scannedText.length > diag.bestText.length) diag.bestText = scannedText;
+      const hits = countRivenKeywordHits(scannedText);
       if (hits > diag.keywordHits) diag.keywordHits = hits;
       // Both halves of the gate are reported, so a failure says which one fell short
       // instead of implying only the keyword count mattered.
-      const valueHits = countRivenValueHits(recognition.text);
+      const valueHits = countRivenValueHits(scannedText);
       if (valueHits > diag.valueHits) diag.valueHits = valueHits;
 
-      if (!isLikelyWarframeRivenContent(recognition.text)) continue;
+      if (!isLikelyWarframeRivenContent(scannedText)) continue;
+      diag.unverified += (recognition.cards.current.agreed ? 0 : 1);
 
       rivenOverlayCachedDisplayId = capture.display && capture.display.id != null
         ? capture.display.id
@@ -1326,8 +2217,18 @@ async function scanRivenOverlayOnce() {
 
       return {
         ok: true,
-        text: recognition.text,
-        lines: recognition.lines,
+        // The right card is the new roll, and it is what gets graded. The left card
+        // is the roll it replaces, read from the same frame rather than remembered
+        // from the last scan.
+        text: recognition.cards.current.text,
+        lines: recognition.cards.current.lines,
+        ocrEngine: recognition.cards.current.engine || '',
+        ocrEngines: recognition.cards.current.engines || [],
+        ocrCorroborating: recognition.cards.current.corroborating || 0,
+        ocrVerified: !!recognition.cards.current.verified,
+        previousText: recognition.cards.previous.text,
+        previousLines: recognition.cards.previous.lines,
+        previousOcrEngine: recognition.cards.previous.engine || '',
         imageSize: capture.imageSize,
         displayBounds: capture.display && capture.display.bounds ? capture.display.bounds : null,
         displayId: capture.display && capture.display.id != null ? capture.display.id : displayId,
@@ -1368,17 +2269,105 @@ function describeRivenScanFailure(diag) {
 }
 
 /**
+ * Find the weapon a parsed card belongs to.
+ *
+ * OCR puts fragments above the real weapon name, so every plausible name is tried
+ * and the first one this tool actually knows wins. Matching published data is the
+ * only reliable signal, and it also rejects the fragment.
+ */
+function matchRivenWeapon(rivenData, data, parsed) {
+  const names = (parsed.weaponNameCandidates && parsed.weaponNameCandidates.length)
+    ? parsed.weaponNameCandidates
+    : (parsed.weaponName ? [parsed.weaponName] : []);
+  if (!names.length) {
+    return { weapon: null, matchedName: null, error: 'The weapon name was not readable, so the disposition is unknown.' };
+  }
+
+  const tried = [];
+  for (const name of names) {
+    const found = rivenData.findRivenWeapon(data, name);
+    if (found && found.weapon) {
+      return { weapon: found.weapon, matchedName: name, error: null };
+    }
+    tried.push(name);
+  }
+
+  return {
+    weapon: null,
+    matchedName: null,
+    error: '"' + tried.join('", "') + '" ' + (tried.length > 1 ? 'are not weapons' : 'is not a weapon') +
+      ' this tool knows, so its disposition is unknown and no maximum roll can be computed.'
+  };
+}
+
+/**
+ * Summarise the other card on the same frame, for the before/after view.
+ *
+ * The left card is the riven the new roll replaces, so it is a truer "previous roll"
+ * than the last remembered one: it is what was actually on screen, and it is still
+ * there after a restart or a missed scan. It is only used when it grades as the same
+ * weapon, because a diff between two different rivens is worse than no diff. Every
+ * doubtful step returns null and the caller falls back to the remembered roll.
+ */
+function summarizeRivenSideCard(text, rivenData, data, currentParsed) {
+  if (!rivenData || !data || !String(text || '').trim()) return null;
+
+  let parsed = null;
+  try {
+    parsed = getRivenParserModule().parseRivenOcr(text);
+  } catch (err) {
+    return null;
+  }
+  // A partial read would put a wrong number next to a right one, which is the one
+  // comparison the player is actually reading.
+  if (!parsed || !parsed.stats.length || parsed.unresolvedStats.length) return null;
+
+  const match = matchRivenWeapon(rivenData, data, parsed);
+  const current = currentParsed ? matchRivenWeapon(rivenData, data, currentParsed) : null;
+  if (!match.weapon || !current.weapon) return null;
+  if (String(match.weapon.name).toLowerCase() !== String(current.weapon.name).toLowerCase()) return null;
+
+  let grade = null;
+  try {
+    grade = rivenData.gradeRiven(match.weapon, parsed.stats);
+  } catch (err) {
+    return null;
+  }
+  if (!grade) return null;
+
+  return buildRivenRollSummary(parsed, grade);
+}
+
+/**
  * Turn a successful OCR read into a graded riven.
  *
  * Returns a payload shaped for the renderer. Any step that cannot be completed
  * honestly reports why instead of guessing: an unrecognised weapon has no
  * disposition, and a disposition is what every maximum roll is scaled by.
  */
-async function gradeRivenScan(success) {
+async function gradeRivenScan(success, options) {
+  /* `file: false` grades without saving.
+   *
+   * The watch loop grades on every flip between the two cards, and saving those
+   * would file the same riven several times while the player is still deciding.
+   * The burst that runs on the reroll itself is what saves. */
+  const settings = options || {};
+  const shouldFile = settings.file !== false;
   const base = {
     stage: 'ocr',
     text: success.text,
     lines: success.lines,
+    // Which engine produced this read, and whether the other one agreed. A disputed
+    // value is much easier to argue about when the report says who saw what.
+    ocrEngine: success.ocrEngine || '',
+    ocrEngines: success.ocrEngines || [],
+    ocrCorroborating: success.ocrCorroborating || 0,
+    ocrVerified: !!success.ocrVerified,
+    // The other card on the same frame, kept so a report of a bad read can show
+    // what both halves of the screen actually said.
+    previousText: success.previousText,
+    previousLines: success.previousLines,
+    previousOcrEngine: success.previousOcrEngine || '',
     displayId: success.displayId,
     displayBounds: success.displayBounds,
     capturedAt: success.capturedAt
@@ -1456,37 +2445,19 @@ async function gradeRivenScan(success) {
   let weapon = null;
   let weaponError = null;
   let matchedName = null;
+  let rivenDataModule = null;
+  let rivenDataPayload = null;
   try {
-    const rivenData = getRivenDataModule();
+    rivenDataModule = getRivenDataModule();
     // getRivenData() is what actually loads the grade sheet and weapon list;
     // getCachedRivenData() only reads the cache it fills. Calling the getter alone
     // left the cache null, so every lookup failed and nothing could be graded.
     // It is TTL-cached, so repeat scans re-fetch at most once per interval.
-    const data = await rivenData.getRivenData();
-    // OCR puts fragments above the real weapon name, so every plausible name is
-    // tried and the first one this tool actually knows wins. Matching published
-    // data is the only reliable signal, and it also rejects the fragment.
-    const names = (parsed.weaponNameCandidates && parsed.weaponNameCandidates.length)
-      ? parsed.weaponNameCandidates
-      : (parsed.weaponName ? [parsed.weaponName] : []);
-    if (!names.length) {
-      weaponError = 'The weapon name was not readable, so the disposition is unknown.';
-    } else {
-      const tried = [];
-      for (const name of names) {
-        const found = rivenData.findRivenWeapon(data, name);
-        if (found && found.weapon) {
-          weapon = found.weapon;
-          matchedName = name;
-          break;
-        }
-        tried.push(name);
-      }
-      if (!weapon) {
-        weaponError = '"' + tried.join('", "') + '" ' + (tried.length > 1 ? 'are not weapons' : 'is not a weapon') +
-          ' this tool knows, so its disposition is unknown and no maximum roll can be computed.';
-      }
-    }
+    rivenDataPayload = await rivenDataModule.getRivenData();
+    const match = matchRivenWeapon(rivenDataModule, rivenDataPayload, parsed);
+    weapon = match.weapon;
+    matchedName = match.matchedName;
+    weaponError = match.error;
   } catch (err) {
     weaponError = 'Could not load weapon data: ' + (err && err.message ? err.message : 'unknown error');
   }
@@ -1513,9 +2484,10 @@ async function gradeRivenScan(success) {
     success: true,
     parsed: parsed,
     grade: grade,
-    // The roll this one is replacing, for the before/after view. Only set when
-    // it is the same weapon, so switching weapons in the mods screen does not
-    // present an unrelated riven as "your previous roll".
+    // The roll this one is replacing, for the before/after view. Filled in below
+    // from the left card of the same frame, or from the last roll graded in this
+    // session. Only set when it is the same weapon, so switching weapons in the
+    // mods screen does not present an unrelated riven as "your previous roll".
     previousRoll: null,
     // Per-stat good/poor verdicts, resolved from the community sheet.
     statVerdicts: [],
@@ -1532,16 +2504,36 @@ async function gradeRivenScan(success) {
       : ''
   });
 
-  // Saved to the inventory so the riven is still there once the reroll screen
-  // is gone. A failure here must not lose the grade that was just computed.
+  // The roll this one replaces, and the per-stat verdicts, are worked out for
+  // every read: the watch loop shows them over the game. Only the save is skipped
+  // there, because it grades on every flip between the cards.
   try {
     const summary = buildRivenRollSummary(parsed, grade);
     const key = rivenRollKey(parsed.weaponName);
-    if (rivenLastRoll && rivenLastRoll.key === key) {
+    result.statVerdicts = describeRivenStatVerdicts(weapon, parsed.stats);
+    // A tier per stat, so the player can see which stat is carrying the roll and
+    // which is dead weight, rather than one number for the whole riven.
+    try {
+      result.statTiers = getRivenDataModule().rivenStatTiers(weapon, parsed.stats) || [];
+    } catch (err) {
+      result.statTiers = [];
+    }
+
+    // The roll this one replaces, read from the left card of the same frame when
+    // that read is sound, and otherwise the last one graded in this session. Only
+    // set for the same weapon, so switching weapons in the mods screen does not
+    // present an unrelated riven as "your previous roll".
+    const fromScreen = summarizeRivenSideCard(success.previousText, rivenDataModule, rivenDataPayload, parsed);
+    if (fromScreen) {
+      result.previousRoll = fromScreen;
+    } else if (rivenLastRoll && rivenLastRoll.key === key) {
       result.previousRoll = rivenLastRoll.summary;
     }
     rivenLastRoll = { key: key, summary: summary };
-    result.statVerdicts = describeRivenStatVerdicts(weapon, parsed.stats);
+
+    // Saved to the inventory so the riven is still there once the reroll screen is
+    // gone. A failure here must not lose the grade that was just computed.
+    if (!shouldFile) return result;
 
     const saved = await addRivenToInventory({
       weaponName: parsed.weaponName,
@@ -1567,6 +2559,11 @@ async function runRivenScanBurst() {
   let lastDiag = null;
   let success = null;
 
+  // Something on screen the moment the reroll is seen, so the overlay is visibly
+  // alive while the capture and OCR run. Without it the first sign of life is the
+  // finished card, which arrives a second or two later or not at all.
+  showRivenOverlay({ pending: true }).catch(() => {});
+
   while (rivenOverlayEnabled) {
     // A scan is already running: wait for it instead of burning an attempt on a no-op.
     if (rivenOverlayScanning) {
@@ -1574,7 +2571,8 @@ async function runRivenScanBurst() {
       continue;
     }
     // Always allow one real attempt, even if the burst window elapsed while waiting.
-    if (rivenOverlayScanAttempts > 0 && (rivenOverlayScanAttempts >= 3 || Date.now() >= rivenOverlayBurstUntil)) break;
+    if (rivenOverlayScanAttempts > 0 &&
+        (rivenOverlayScanAttempts >= RIVEN_OVERLAY_MAX_SCAN_ATTEMPTS || Date.now() >= rivenOverlayBurstUntil)) break;
 
     rivenOverlayScanAttempts += 1;
     const result = await scanRivenOverlayOnce();
@@ -1586,7 +2584,7 @@ async function runRivenScanBurst() {
       break;
     }
 
-    if (rivenOverlayScanAttempts < 3) {
+    if (rivenOverlayScanAttempts < RIVEN_OVERLAY_MAX_SCAN_ATTEMPTS) {
       await new Promise((resolve) => setTimeout(resolve, RIVEN_OVERLAY_SCAN_DELAY_MS));
     }
   }
@@ -1594,7 +2592,12 @@ async function runRivenScanBurst() {
   if (!rivenOverlayEnabled) return;
 
   if (success) {
-    sendRivenScanResult(await gradeRivenScan(success));
+    const graded = await gradeRivenScan(success);
+    sendRivenScanResult(graded);
+    // The player is looking at the game, not at this app, so the same result goes
+    // on top of the game. A failure here is not the scan's failure: the grade has
+    // already been computed and filed either way.
+    showRivenOverlay(graded, success.displayBounds ? findDisplayById(success.displayId) : null).catch(() => {});
     return;
   }
 
@@ -1604,6 +2607,12 @@ async function runRivenScanBurst() {
     error: 'Reroll detected, but grading failed. ' + describeRivenScanFailure(lastDiag),
     diag: lastDiag
   });
+  // Say so over the game too, otherwise a failed read looks exactly like a
+  // missing feature.
+  showRivenOverlay({
+    success: false,
+    error: 'Could not read this reroll. ' + describeRivenScanFailure(lastDiag)
+  }).catch(() => {});
 }
 
 function triggerRivenScan(reason) {
@@ -1620,7 +2629,7 @@ function triggerRivenScan(reason) {
   rivenOverlayScanTimer = setTimeout(() => {
     rivenOverlayScanTimer = null;
     runRivenScanBurst().catch(() => {});
-  }, RIVEN_OVERLAY_SCAN_DELAY_MS);
+  }, RIVEN_OVERLAY_FIRST_SCAN_DELAY_MS);
 }
 
 function resetRivenOverlayBurst() {
@@ -1668,12 +2677,30 @@ async function pollRivenOverlayLog() {
     const chunk = await readLogChunk(currentPath, start, logInfo.size, RIVEN_OVERLAY_LOG_TAIL_BYTES);
     rivenOverlayLogOffset = logInfo.size;
 
-    if (isRivenRerollConfirmLogText(chunk)) {
-      triggerRivenScan('Riven reroll confirmed. Reading stats...');
+    /* Which dialog means the cards are on screen.
+     *
+     * The cost prompt ("Are you sure you want to cycle X for Y?") is written before
+     * the player has even answered, and the roll does not exist yet — triggering on
+     * it meant the whole burst ran and expired against a dialog box. In the log of a
+     * real reroll the two are 300+ seconds apart:
+     *
+     *   429.474  Are you sure you want to cycle Multron Decido for 900?
+     *   431.551  Dialog::SendResult(4)          <- the player pressed Yes
+     *   749.300  Cycle Riven into current selection?   <- the new roll is on screen
+     *
+     * So the choice prompt is the trigger. It is also the one with a short fuse: the
+     * player answered 1.5s after it appeared, which is why the first attempt waits
+     * 200ms rather than half a second. */
+    if (isRivenRerollChoiceLogText(chunk)) {
+      triggerRivenScan('Riven rolled. Reading stats...');
+      // The screen stays open while the player decides, and they flip between the
+      // old riven and the new one. Following that is the difference between an
+      // overlay and a notification.
+      startRivenOverlayWatch();
       return;
     }
 
-    if (isRivenRerollChoiceLogText(chunk) || isRivenRerollScreenLogText(chunk)) {
+    if (isRivenRerollConfirmLogText(chunk) || isRivenRerollScreenLogText(chunk)) {
       resetRivenOverlayBurst();
     }
   } catch (err) {
@@ -1719,6 +2746,7 @@ async function startRivenOverlayLoop() {
 
 async function stopRivenOverlayLoop() {
   rivenOverlayEnabled = false;
+  stopRivenOverlayWatch();
   stopRivenOverlayLogWatcher();
   if (rivenOverlayWindow && !rivenOverlayWindow.isDestroyed()) {
     rivenOverlayWindow.close();
@@ -2720,6 +3748,21 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    /* Closing the window closes the app.
+     *
+     * The two overlays are separate windows, so `window-all-closed` never fired
+     * and the process stayed alive with a Tesseract worker and a log poller running
+     * against a game, showing nothing. That is what left a headless Ordis sitting in
+     * the task manager after the window was closed. */
+    if (relicOverlayWindow && !relicOverlayWindow.isDestroyed()) {
+      relicOverlayWindow.close();
+      relicOverlayWindow = null;
+    }
+    if (rivenOverlayWindow && !rivenOverlayWindow.isDestroyed()) {
+      rivenOverlayWindow.close();
+      rivenOverlayWindow = null;
+    }
+    app.quit();
   });
 }
 
@@ -2859,6 +3902,19 @@ ipcMain.handle('set-riven-overlay-enabled', async (_event, enabled) => {
   try {
     rivenOverlayEnabled = true;
     await startRivenOverlayLoop();
+    /* The window is built now rather than on the first result.
+     *
+     * A riven result is only useful for the second or two the cards are on
+     * screen, and creating a BrowserWindow and loading a file takes long enough
+     * that doing it lazily meant the first reroll of every session produced
+     * nothing at all. The relic overlay has always been created on enable for the
+     * same reason. */
+    try {
+      await ensureRivenOverlayWindow(getDisplayForRelicOverlay());
+      if (rivenOverlayWindow && !rivenOverlayWindow.isDestroyed()) rivenOverlayWindow.hide();
+    } catch (err) {
+      // A display that cannot host it is reported by the scan itself.
+    }
     sendRivenOverlayEvent('status', {
       enabled: true,
       message: 'Watching EE.log for riven rerolls...'
@@ -3501,9 +4557,14 @@ app.on('before-quit', () => {
     relicOverlayTimer = null;
   }
   stopRelicOverlayLogWatcher();
+  stopRivenOverlayWatch();
   if (relicOverlayWindow && !relicOverlayWindow.isDestroyed()) {
     relicOverlayWindow.close();
     relicOverlayWindow = null;
+  }
+  if (rivenOverlayWindow && !rivenOverlayWindow.isDestroyed()) {
+    rivenOverlayWindow.close();
+    rivenOverlayWindow = null;
   }
   if (wfmLoginWindow && !wfmLoginWindow.isDestroyed()) {
     wfmLoginWindow.destroy();

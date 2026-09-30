@@ -40,3 +40,9 @@ rivenAttributes.json
 
 # Unused leftover. assets/icon.png is the icon the app and installer use.
 assets/icon.jpg
+
+# Output of warframe-api-helper.exe. This is the player's own live account
+# data, written into the working directory when the helper runs, and it must
+# never be committed. Keep the helper in its own folder outside the repo.
+inventory.json
+lastData.dat

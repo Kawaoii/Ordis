@@ -608,14 +608,14 @@
           </div>
           <div class="rivens-sort" role="group" aria-label="Sort rivens">
             <span class="rivens-sort-label">Sort</span>
-            <button type="button" class="rivens-sort-btn" data-riven-sort="grade" title="Riven grade">Grade</button>
-            <button type="button" class="rivens-sort-btn" data-riven-sort="perfectness"
+            <button type="button" class="ordis-btn rivens-sort-btn" data-riven-sort="grade" title="Riven grade">Grade</button>
+            <button type="button" class="ordis-btn rivens-sort-btn" data-riven-sort="perfectness"
               title="How close each stat is to the best possible roll">Perfect</button>
-            <button type="button" class="rivens-sort-btn" data-riven-sort="disposition">Disp.</button>
-            <button type="button" class="rivens-sort-btn" data-riven-sort="name">Name</button>
-            <button type="button" class="rivens-sort-btn" data-riven-sort="recent">Newest</button>
+            <button type="button" class="ordis-btn rivens-sort-btn" data-riven-sort="disposition">Disp.</button>
+            <button type="button" class="ordis-btn rivens-sort-btn" data-riven-sort="name">Name</button>
+            <button type="button" class="ordis-btn rivens-sort-btn" data-riven-sort="recent">Newest</button>
           </div>
-          <button type="button" class="rivens-action-btn" id="riven-regrade-btn"
+          <button type="button" class="ordis-btn" id="riven-regrade-btn"
             title="Re-read dispositions and the community grade sheet, then re-grade every saved riven">
             <span class="material-icons-round">refresh</span>
             <span>Re-grade all</span>
@@ -624,14 +624,14 @@
       </div>
 
       <div class="rivens-grade-filter" role="group" aria-label="Filter by grade">
-        <button type="button" class="rivens-grade-chip is-active" data-riven-grade="all">All</button>
-        <button type="button" class="rivens-grade-chip" data-riven-grade="S">Great</button>
-        <button type="button" class="rivens-grade-chip" data-riven-grade="A">Good</button>
-        <button type="button" class="rivens-grade-chip" data-riven-grade="B">OK</button>
-        <button type="button" class="rivens-grade-chip" data-riven-grade="C">Bad</button>
+        <button type="button" class="ordis-btn rivens-grade-chip is-active" data-riven-grade="all">All</button>
+        <button type="button" class="ordis-btn rivens-grade-chip" data-riven-grade="S">Great</button>
+        <button type="button" class="ordis-btn rivens-grade-chip" data-riven-grade="A">Good</button>
+        <button type="button" class="ordis-btn rivens-grade-chip" data-riven-grade="B">OK</button>
+        <button type="button" class="ordis-btn rivens-grade-chip" data-riven-grade="C">Bad</button>
         <span class="rivens-filter-spacer"></span>
-        <button type="button" class="rivens-grade-chip" data-riven-listing="unlisted">Not listed</button>
-        <button type="button" class="rivens-grade-chip" data-riven-listing="listed">Listed</button>
+        <button type="button" class="ordis-btn rivens-grade-chip" data-riven-listing="unlisted">Not listed</button>
+        <button type="button" class="ordis-btn rivens-grade-chip" data-riven-listing="listed">Listed</button>
       </div>
 
       <div class="rivens-status" id="rivens-status" role="status"></div>
@@ -643,6 +643,35 @@
           <p class="rivens-empty-body">Turn on <strong>Riven Grading</strong> in Settings, then reroll a riven in
             Warframe. It is graded and filed here automatically.</p>
         </div>
+      </div>
+    </div>
+
+    <!-- One saved riven, opened by clicking its row. -->
+    <div class="modal-overlay hidden" id="riven-detail-modal">
+      <div class="modal riven-detail-modal">
+        <div class="modal-header riven-detail-header">
+          <div class="riven-detail-header-wrap">
+            <div class="riven-detail-media" id="riven-detail-media">
+              <img id="riven-detail-img" src="" alt="" class="riven-detail-img">
+              <div class="riven-row__grade riven-detail-grade" id="riven-detail-grade" data-grade="">?</div>
+            </div>
+            <div class="riven-detail-header-copy">
+              <span class="riven-detail-kicker">Riven</span>
+              <h2 class="modal-title" id="riven-detail-name">Riven</h2>
+              <p class="riven-detail-subtitle" id="riven-detail-sub"></p>
+            </div>
+          </div>
+          <button class="modal-close" id="riven-detail-close" type="button" aria-label="Close">
+            <span class="material-icons-round">close</span>
+          </button>
+        </div>
+        <div class="modal-body riven-detail-body">
+          <div class="riven-detail-score" id="riven-detail-score"></div>
+          <div class="riven-detail-stats" id="riven-detail-stats"></div>
+          <div class="riven-detail-reasons" id="riven-detail-reasons"></div>
+          <div class="riven-detail-market" id="riven-detail-market"></div>
+        </div>
+        <div class="modal-footer riven-detail-footer" id="riven-detail-actions"></div>
       </div>
     </div>
 
@@ -1418,6 +1447,21 @@
             </button>
           </div>
 
+          <!-- Funding row. renderer.js removes this whole block when no sponsor handle
+               is configured, so an unconfigured build shows nothing rather than a
+               button that goes nowhere. -->
+          <div class="settings-about-credit" id="settings-support" hidden>
+            <div class="settings-about-credit-title">Support Ordis</div>
+            <p class="settings-about-credit-text">
+              Ordis is free, has no ads and no account. If it saved you some time, a
+              coffee helps keep the riven reader and relic overlay maintained.
+            </p>
+            <button class="btn btn-secondary settings-link-btn" id="btn-open-sponsor" type="button">
+              <span class="material-icons-round">local_cafe</span>
+              <span>Buy me a coffee</span>
+            </button>
+          </div>
+
           <p class="settings-about-disclaimer">
             Ordis is a community-built, unofficial fan project. It is not affiliated with,
             sponsored by, or endorsed by Digital Extremes. Warframe&reg; is a trademark of
@@ -1852,6 +1896,7 @@
   <script src="market.js"></script>
   <script src="renderer.js"></script>
   <script src="dock.js"></script>
+<script src="splitview.js"></script>
 </body>
 
 </html>

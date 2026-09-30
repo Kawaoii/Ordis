@@ -126,8 +126,93 @@ const RIVEN_STATS = {
   // these two rather than inventing a ceiling. Do not add a base without a
   // published value to check it against.
   CHD: { display: 'Channeling Damage', aliases: ['channeling damage'] },
-  CHE: { display: 'Channeling Efficiency', aliases: ['channeling efficiency'] }
+  CHE: { display: 'Channeling Efficiency', aliases: ['channeling efficiency'] },
+
+  /* ---- Combined stats, from the riven rework (Devshorts #115 & #116, Aug 2026) ----
+   *
+   * Rivens can now merge two attributes into one the player has never been able to
+   * cycle for. Heat + Cold becomes Blast, and so on down the table in
+   * RIVEN_COMBINED_STATS. Damage + Status Chance becomes Status, which is the odd one
+   * out: it folds a damage type and a rate stat together rather than two damage types.
+   *
+   * There is no `base` on any of these, for the same reason Channeling Damage has none:
+   * the rework has not shipped and no ceiling has been published for any weapon class.
+   * statMaxValue therefore returns null and perfectness reports unknown, which is the
+   * correct answer. Inventing a base here would produce confident, wrong percentages on
+   * exactly the rivens players are most excited about, which is the failure this whole
+   * reader is built to avoid. Add a base only against a published value.
+   *
+   * They are listed here rather than left unknown so a combined riven parses, names
+   * correctly, and can be searched and traded. A stat that fails to resolve is worse
+   * than one with an honest "no ceiling yet". */
+  BLAST: { display: 'Blast Damage', aliases: ['blast damage', 'blast'] },
+  GAS: { display: 'Gas Damage', aliases: ['gas damage', 'gas'] },
+  VIRAL: { display: 'Viral Damage', aliases: ['viral damage', 'viral'] },
+  RADIATION: { display: 'Radiation Damage', aliases: ['radiation damage', 'radiation'] },
+  CORROSIVE: { display: 'Corrosive Damage', aliases: ['corrosive damage', 'corrosive'] },
+  SHOCK: { display: 'Shock Damage', aliases: ['shock damage', 'shock'] },
+  MAGNETIC: { display: 'Magnetic Damage', aliases: ['magnetic damage', 'magnetic'] },
+  HEMORRHAGE: { display: 'Hemorrhage Damage', aliases: ['hemorrhage damage', 'hemorrhage', 'haemorrhage'] },
+  CAVALRY: { display: 'Cavalry Damage', aliases: ['cavalry damage', 'cavalry'] },
+  DEMOLITION: { display: 'Demolition Damage', aliases: ['demolition damage', 'demolition'] },
+  STATUS: { display: 'Status Damage', aliases: ['status damage', 'status'] }
 };
+
+/**
+ * Which two attributes merge into which, from the rework announcement.
+ *
+ * This is what lets the app say "Blast, so Heat and Cold" instead of leaving the
+ * player to work it out, and it is what a trade search needs: a Blast roll and a
+ * Heat+Cold roll are the same stat to a buyer, and without this they are not
+ * interchangeable.
+ *
+ * Order matters where two inputs could pair more than once, so the pairs are listed
+ * explicitly rather than derived. Keys are sorted component keys joined with '+'.
+ *
+ * Status is the exception and is called out: it comes from Damage + Status Chance,
+ * not from two damage types.
+ */
+const RIVEN_COMBINED_STATS = {
+  'HEAT+COLD': 'BLAST',
+  'HEAT+TOX': 'GAS',
+  'COLD+TOX': 'VIRAL',
+  'HEAT+ELEC': 'RADIATION',
+  'TOX+ELEC': 'CORROSIVE',
+  'COLD+ELEC': 'SHOCK',
+  'ELEC+IMP': 'MAGNETIC',
+  'IMP+PUNC': 'HEMORRHAGE',
+  'IMP+SLASH': 'CAVALRY',
+  'PUNC+SLASH': 'DEMOLITION',
+  'DMG+SC': 'STATUS'
+};
+
+/**
+ * Reverse lookup: which two attributes produce this stat.
+ *
+ * Returns null for anything that is not a combined stat, so callers can treat
+ * "not combined" and "combined but unknown" the same way.
+ */
+function rivenCombinedComponents(key) {
+  const wanted = String(key || '').toUpperCase();
+  for (const pair of Object.keys(RIVEN_COMBINED_STATS)) {
+    if (RIVEN_COMBINED_STATS[pair] !== wanted) continue;
+    return pair.split('+');
+  }
+  return null;
+}
+
+/**
+ * The combined stat these two attributes make, or null.
+ *
+ * Passing either order works, because a player reads the card in whatever order the
+ * stats happen to be listed and should not have to care.
+ */
+function rivenCombineStats(a, b) {
+  const keyA = String(a || '').toUpperCase();
+  const keyB = String(b || '').toUpperCase();
+  if (!keyA || !keyB) return null;
+  return RIVEN_COMBINED_STATS[keyA + '+' + keyB] || RIVEN_COMBINED_STATS[keyB + '+' + keyA] || null;
+}
 
 /**
  * Canonical Warframe.market `url_name` for each stat.
@@ -144,6 +229,76 @@ const RIVEN_STATS = {
  * `fire_rate_/_attack_speed` entry for both columns. FR is listed first so it
  * wins the exact match; the parser picks AS from the resolved weapon class.
  */
+/**
+ * The name the game itself prints on the riven card, per attribute.
+ *
+ * `display` above is the wiki/market wording, which is not what the game shows:
+ * the card reads "Cold", "Slash", "Electricity" and "Damage to Infested", not
+ * "Cold Damage", "Slash Damage", "Electric Damage" and "Damage vs Infested".
+ * Anything shown to the player or pasted into a trade filter has to be the
+ * in-game string, or the search finds nothing.
+ *
+ * Taken from Warframe.market's published attribute list
+ * (`/v2/riven/attributes`, `i18n.en.name`), which is the same list their trade
+ * filters are built from. Two corrections to that list are noted inline. Any
+ * attribute missing here falls back to `display`.
+ */
+const RIVEN_STAT_GAME_NAMES = {
+  CD: 'Critical Damage',
+  CC: 'Critical Chance',
+  DMG: 'Damage',
+  MS: 'Multishot',
+  FR: 'Fire Rate',
+  RLS: 'Reload Speed',
+  MAG: 'Magazine Capacity',
+  AMMO: 'Ammo Maximum',
+  REC: 'Weapon Recoil',
+  TOX: 'Toxin',
+  HEAT: 'Heat',
+  COLD: 'Cold',
+  ELEC: 'Electricity',
+  SLASH: 'Slash',
+  IMP: 'Impact',
+  PUNC: 'Puncture',
+  DTC: 'Damage to Corpus',
+  DTG: 'Damage to Grineer',
+  DTI: 'Damage to Infested',
+  SD: 'Status Duration',
+  SC: 'Status Chance',
+  PT: 'Punch Through',
+  // Their list writes "Projectile speed"; every other name in it is title case,
+  // and the card renders it capitalised.
+  PFS: 'Projectile Speed',
+  ZOOM: 'Zoom',
+  RANGE: 'Range',
+  IC: 'Initial Combo',
+  ACC: 'Additional Combo Count',
+  CDUR: 'Combo Duration',
+  AS: 'Attack Speed',
+  EFF: 'Heavy Attack Efficiency',
+  FIN: 'Finisher Damage',
+  SCC: 'Critical Chance for Slide Attack',
+  // Their list has no entry for either of these: "channeling_damage" is labelled
+  // "Initial combo" and "channeling_efficiency" is labelled "Heavy Attack
+  // Efficiency", which is a different attribute. Left to the display name.
+  CHD: 'Channeling Damage',
+  CHE: 'Channeling Efficiency'
+};
+
+/**
+ * Canonical in-game name for an attribute key, or '' when the key is unknown.
+ *
+ * This is what the app shows and what the trade string is built from. OCR reads
+ * the card imperfectly — "Status Chanci", "Projectile Spee", "Magazine v
+ * Capacity" — so a name that has been resolved to a key is replaced by this
+ * rather than shown as it was read.
+ */
+function rivenStatName(key) {
+  const meta = RIVEN_STATS[key];
+  if (!meta) return '';
+  return RIVEN_STAT_GAME_NAMES[key] || meta.display || '';
+}
+
 const RIVEN_WFM_NAMES = {
   CD: 'critical_damage',
   CC: 'critical_chance',
@@ -897,6 +1052,99 @@ function statMaxValue(key, weaponClass, disposition, weight) {
  * community considers good plus a harmless negative; Bad means nothing helps or
  * the negative is actively harmful.
  */
+/**
+ * A tier per stat, the way a companion app presents a roll.
+ *
+ * `gradeRiven` produces one number for the whole riven, which hides the thing a
+ * player actually wants to know: which stat is carrying it and which is dead
+ * weight. Every input is already computed for the grade — the community sheet's
+ * good/bad list, the tolerated curses, and the maximum each stat could reach on
+ * this weapon — so this is a presentation of work that has been done, not a second
+ * opinion.
+ *
+ *   S  a stat the weapon wants, rolled at 95% or better of its maximum
+ *   A  a stat the weapon wants, at 70% or better
+ *   B  wanted but rolled low, or neutral on this weapon
+ *   C  unwanted: a stat nothing here wants, or a curse nothing tolerates
+ *   ?  no verdict published, or no published maximum to measure it against
+ *
+ * `ratio` is how close the roll is to that maximum, and is null when the maximum
+ * is not published. Nothing here is ever a guess: a stat with neither a verdict
+ * nor a maximum comes back as '?' rather than being folded into an average.
+ */
+function rivenStatTiers(weapon, stats) {
+  const list = Array.isArray(stats) ? stats : [];
+  if (!list.length) return [];
+
+  const hasCommunityData = Boolean(weapon && weapon.hasCommunityData);
+  const goodStats = new Set(weapon && weapon.goodStats ? weapon.goodStats : []);
+  const acceptableNegatives = new Set(weapon && weapon.acceptableNegatives ? weapon.acceptableNegatives : []);
+  const disposition = weapon && weapon.disposition ? weapon.disposition : 0;
+  const weaponClass = resolveWeaponClass(weapon);
+  const weights = rivenCompositionWeight(
+    list.filter((s) => s && s.isPositive).length,
+    list.filter((s) => s && !s.isPositive).length
+  );
+  const canMeasure = Boolean(weaponClass) && Boolean(weights);
+
+  return list.map((stat) => {
+    if (!stat || !stat.key) {
+      return { key: null, name: String(stat && stat.name ? stat.name : ''), tier: '?', ratio: null, max: null, verdict: 'unknown', note: 'Not a stat this tool recognises.' };
+    }
+
+    const isPositive = Boolean(stat.isPositive);
+    const splice = isSpliceTrait(stat.key) ? evaluateSpliceTrait(stat.key, goodStats) : null;
+
+    let verdict = 'unknown';
+    if (isPositive) {
+      if (splice) verdict = splice.good ? 'good' : 'poor';
+      else if (hasCommunityData) verdict = goodStats.has(stat.key) ? 'good' : 'poor';
+      else verdict = 'unknown';
+    } else {
+      if (!hasCommunityData) verdict = 'unknown';
+      else verdict = acceptableNegatives.has(stat.key) ? 'harmless' : 'harmful';
+    }
+
+    const weight = isPositive ? (weights ? weights.bonus : null) : (weights ? Math.abs(weights.malus) : null);
+    const max = canMeasure ? statMaxValue(stat.key, weaponClass, disposition, weight) : null;
+    const magnitude = Math.abs(Number(stat.value) || 0);
+    const ratio = max != null && max > 0 ? magnitude / max : null;
+
+    let tier = '?';
+    if (!isPositive) {
+      // A curse is judged on whether the weapon tolerates it, not on its size:
+      // a small unwanted curse and a large one are the same mistake.
+      if (verdict === 'harmless') tier = 'B';
+      else if (verdict === 'harmful') tier = 'C';
+    } else if (verdict === 'good') {
+      if (ratio == null) tier = 'A';
+      else if (ratio >= 0.95) tier = 'S';
+      else if (ratio >= 0.7) tier = 'A';
+      else tier = 'B';
+    } else if (verdict === 'poor') {
+      tier = ratio == null ? 'C' : (ratio >= 0.95 ? 'C' : 'C');
+    }
+
+    const notes = {
+      S: 'Wanted, and rolled as high as this weapon allows.',
+      A: 'Wanted, and rolled well.',
+      B: verdict === 'harmless' ? 'A penalty this weapon tolerates.' : 'Wanted, but rolled low.',
+      C: isPositive ? 'Not a stat this weapon wants.' : 'A penalty nothing here tolerates.',
+      '?': 'No community verdict, or no published maximum to measure against.'
+    };
+
+    return {
+      key: stat.key,
+      name: rivenStatName(stat.key) || String(stat.name || ''),
+      tier: tier,
+      ratio: ratio == null ? null : Math.round(ratio * 1000) / 10,
+      max: max == null ? null : Math.round(max * 10) / 10,
+      verdict: verdict,
+      note: notes[tier] || notes['?']
+    };
+  });
+}
+
 function gradeRiven(weapon, stats) {
   const list = Array.isArray(stats) ? stats : [];
   const positives = list.filter(s => s && s.isPositive);
@@ -1121,6 +1369,9 @@ module.exports = {
   RIVEN_WFM_NAMES,
   RIVEN_WFM_ALIAS_NAMES,
   RIVEN_SPLICE_TRAITS,
+  RIVEN_COMBINED_STATS,
+  rivenCombinedComponents,
+  rivenCombineStats,
   RIVEN_SPLICE_TRAIT_ALIASES,
   RIVEN_SPLICE_TRAIT_KEYS,
   RIVEN_GRADE_BANDS,
@@ -1136,6 +1387,8 @@ module.exports = {
   parsePositiveCombinations,
   parseNegativeList,
   resolveRivenStatKey,
+  rivenStatName,
+  rivenStatTiers,
   isSpliceTrait,
   rivenCompositionWeight,
   resolveWeaponClass,

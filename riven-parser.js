@@ -166,7 +166,11 @@ function trimStatName(rawName) {
 
 function parseStatLine(line) {
   if (!line) return null;
-  const text = String(line).trim();
+  // A space inside a decimal is OCR splitting the fraction, not a real gap: a
+  // live frame read "+88 .3% Status Duration", and taking the "3" as the value
+  // graded an 88.3% bonus as 3%. Closing the gap first costs nothing when the
+  // text is clean and stops that read being silently wrong.
+  const text = String(line).trim().replace(/(\d)\s*\.\s*(\d)/g, '$1.$2');
 
   // The stat value is the first number on the line whose following text starts
   // with a letter. Not simply the first number: OCR often prefixes debris to a
@@ -177,7 +181,9 @@ function parseStatLine(line) {
   let match;
   while ((match = numberPattern.exec(text)) !== null) {
     const after = text.slice(match.index + match[0].length);
-    if (/^[\s%)\].,:;|]*[A-Za-z_]/.test(after)) {
+    // Separators between the value and the name are whatever the frame drew, not
+    // a fixed set: "%", ")", "_", "\" and "»" all turn up in front of a name.
+    if (/^[^A-Za-z0-9]*[A-Za-z_]/.test(after)) {
       found = { index: match.index, text: match[0] };
       break;
     }
@@ -189,8 +195,10 @@ function parseStatLine(line) {
   const after = text.slice(found.index + found.text.length);
 
   // The stat name follows the value and must start with a letter, which rejects
-  // lines where the number is the content ("MR 8", "022").
-  const rest = after.replace(/^[\s%]+/, '');
+  // lines where the number is the content ("MR 8", "022"). Debris between the
+  // value and the name has to go first: a real frame read "+112.1% \_Slash", and
+  // requiring a letter there dropped the whole stat.
+  const rest = after.replace(/^[\s%]+/, '').replace(/^[^A-Za-z]+/, '');
   if (!/^[A-Za-z]/.test(rest)) return null;
   const name = trimStatName(rest);
   if (!name) return null;
@@ -204,7 +212,15 @@ function parseStatLine(line) {
   const marker = before.replace(/\s+$/, '');
 
   if (/x$/i.test(marker)) {
-    return { value: Math.round(number * 1000) / 10, name: name, isPositive: number >= 1 };
+    // "x1.55 Damage to Grineer" is +155. A marked fraction under 1 is the same
+    // malus a bare one is, and it has to be read the same way: a live frame read
+    // "v &x0.72 Damage to Infested", which used to come out as a 72% penalty
+    // instead of the 28% shortfall it is. A wrong value grades silently; this is
+    // the one case where being wrong is worse than dropping the line.
+    if (number < 1) {
+      return { value: Math.round((1 - number) * 1000) / 10, name: name, isPositive: false };
+    }
+    return { value: Math.round(number * 1000) / 10, name: name, isPositive: true };
   }
   if (/\+$/.test(marker)) {
     return { value: number, name: name, isPositive: true };
@@ -307,9 +323,16 @@ function parseRivenOcr(rawText) {
   const commit = (candidate) => {
     if (!candidate) return;
     const key = fuzzyStatKey(candidate.name);
+    // A resolved name is replaced by the game's own wording. What OCR produced is
+    // not something to show a player or paste into a trade filter: a live reroll
+    // read "Status Chanci", "Projectile Spee" and "Magazine v Capacity", and the
+    // last of those is not a name the game or the market will ever match. An
+    // unresolved line keeps the text as read, because that is the only clue about
+    // what was on the card.
+    const canonical = key ? rivenData.rivenStatName(key) : '';
     const entry = {
       key: key,
-      name: candidate.name,
+      name: canonical || candidate.name,
       value: candidate.value,
       isPositive: candidate.isPositive
     };
@@ -407,13 +430,19 @@ function parseRivenOcr(rawText) {
 
   if (pending) commit(pending);
 
-  // A riven carries two or three bonuses and at most one curse. Anything else
-  // means the parse picked up noise or lost a line, and grading it anyway would
-  // produce a confident wrong answer.
+  /* A riven carries two or three bonuses and at most one curse. Anything well past that
+   * means the parse picked up noise or lost a line, and grading it anyway would produce
+   * a confident wrong answer.
+   *
+   * The bonus ceiling is four, not three, because the riven rework changed this. DE
+   * states a riven can hold a combined stat *and* the two attributes it was made from
+   * at the same time, so four lines on one card is a real, correct read rather than
+   * noise. Flagging it would mean every post-rework riven raised a false alarm, and a
+   * warning that always fires is a warning nobody reads. */
   const positives = result.stats.filter((s) => s.isPositive).length;
   const negatives = result.stats.filter((s) => !s.isPositive).length;
-  if (positives > 3) {
-    result.warnings.push('read ' + positives + ' bonuses, but a riven has at most 3');
+  if (positives > 4) {
+    result.warnings.push('read ' + positives + ' bonuses, but a riven has at most 4');
   }
   if (negatives > 1) {
     result.warnings.push('read ' + negatives + ' curses, but a riven has at most 1');

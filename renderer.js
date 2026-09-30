@@ -29,6 +29,9 @@
   const PROFILE_PROCESS_WATCH_INTERVAL_MS = 3000;
   const PROFILE_PROCESS_WATCH_TIMEOUT_MS = 90000;
   const ALWAYS_ON_TOP_KEY = 'warframe_always_on_top_enabled';
+  const RELIC_OVERLAY_KEY = 'warframe_relic_overlay_enabled';
+  const RIVEN_OVERLAY_KEY = 'warframe_riven_overlay_enabled';
+  const RIVEN_DISPLAY_KEY = 'warframe_riven_overlay_display';
 const AUTO_UPDATE_CHECK_KEY = 'warframe_auto_update_check_enabled';
 const AUTO_UPDATE_LAST_CHECK_KEY = 'warframe_auto_update_last_check_at';
 const AUTO_UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -69,6 +72,14 @@ const UPDATE_CHECK_STATE_FILE = 'update-check-state.json';
   // about screen as a valid place for it.
   const UPSTREAM_URL = 'https://github.com/Hasan580/Warframe-companion-app';
   const UPSTREAM_AUTHOR = 'Hassan F.';
+  /* Funding link, shown in About.
+   *
+   * Optional on purpose: set SPONSOR_USERNAME to a Buy Me a Coffee handle and the row
+   * appears; leave it empty and the row is removed from the DOM entirely rather than
+   * showing a dead button. An empty string here means the app ships with no funding
+   * prompt at all, which is a valid choice and not a broken state. */
+  const SPONSOR_USERNAME = 'kawaoii';
+  const SPONSOR_URL = SPONSOR_USERNAME ? 'https://www.buymeacoffee.com/' + SPONSOR_USERNAME : '';
   const UPDATE_REPO_API = 'https://api.github.com/repos/' + FORK.OWNER + '/' + FORK.REPO;
   const UPDATE_RELEASE_API = UPDATE_REPO_API + '/releases/latest';
   const UPDATE_TAGS_API = UPDATE_REPO_API + '/tags?per_page=1';
@@ -534,6 +545,7 @@ const visibilityTickHandles = new Set();
     openGithubRepoBtn: $('#btn-open-github-repo'),
     openIssuesBtn: $('#btn-open-issues'),
     openUpstreamBtn: $('#btn-open-upstream'),
+    openSponsorBtn: $('#btn-open-sponsor'),
     updateStatusPill: $('#update-status-pill'),
     updateStatusText: $('#update-status-text'),
     appContainer: $('.app-container'),
@@ -574,6 +586,17 @@ const visibilityTickHandles = new Set();
     relicDetailName: $('#relic-detail-name'),
     relicDetailSub: $('#relic-detail-sub'),
     relicDetailDrops: $('#relic-detail-drops'),
+  rivenDetailModal: $('#riven-detail-modal'),
+  rivenDetailClose: $('#riven-detail-close'),
+  rivenDetailImg: $('#riven-detail-img'),
+  rivenDetailGrade: $('#riven-detail-grade'),
+  rivenDetailName: $('#riven-detail-name'),
+  rivenDetailSub: $('#riven-detail-sub'),
+  rivenDetailScore: $('#riven-detail-score'),
+  rivenDetailStats: $('#riven-detail-stats'),
+  rivenDetailReasons: $('#riven-detail-reasons'),
+  rivenDetailMarket: $('#riven-detail-market'),
+  rivenDetailActions: $('#riven-detail-actions'),
     arcanesPanel: $('#arcanes-panel'),
     arcaneSearchInput: $('#arcane-search-input'),
     arcaneSearchClear: $('#arcane-search-clear'),
@@ -7535,7 +7558,10 @@ const visibilityTickHandles = new Set();
         index: index,
         fraction: fraction,
         x: width * fraction,
-        y: Math.max(160, height * 0.386)
+        /* Below the relic card, not on it. The reward cards are centred on
+         * 0.386 of the screen height and are roughly 0.17 of it tall, so the
+         * anchor is the card's lower edge plus a small gap. */
+        y: Math.max(220, height * (0.386 + 0.088))
       };
     });
   }
@@ -14843,6 +14869,10 @@ card.addEventListener('auxclick', function(e) {
     await openExternalUrl(UPSTREAM_URL);
   }
 
+  async function openSponsorPage() {
+    await openExternalUrl(SPONSOR_URL);
+  }
+
   function setProfileSyncIndicator(state, text, title) {
     if (!els.profileSyncPill) return;
     var nextState = state || 'offline';
@@ -15796,6 +15826,39 @@ card.addEventListener('auxclick', function(e) {
     await setAlwaysOnTopEnabled(enabled);
   }
 
+  /**
+   * Restore the overlay switches from the last session and turn them back on.
+   *
+   * Both overlays watch EE.log and do nothing until something happens in game, so
+   * an off-by-default switch that forgets itself is indistinguishable from a
+   * broken feature: the app looks ready and simply never reports anything. The
+   * display the riven overlay was pointed at is remembered for the same reason —
+   * a two-monitor setup should not have to be told which screen the game is on
+   * every launch.
+   */
+  async function initOverlaySettings() {
+    var relicEnabled = localStorage.getItem(RELIC_OVERLAY_KEY) === '1';
+    var rivenEnabled = localStorage.getItem(RIVEN_OVERLAY_KEY) === '1';
+    var displayId = String(localStorage.getItem(RIVEN_DISPLAY_KEY) || '').trim();
+
+    if (displayId && window.electronAPI && window.electronAPI.setRivenOverlayDisplay) {
+      try {
+        await window.electronAPI.setRivenOverlayDisplay(displayId);
+      } catch (err) {
+        // A monitor that is no longer attached is not worth failing startup over.
+      }
+    }
+
+    if (els.relicOverlayToggle) {
+      els.relicOverlayToggle.checked = relicEnabled;
+      if (relicEnabled) await setRelicOverlayEnabled(true);
+    }
+    if (els.rivenOverlayToggle) {
+      els.rivenOverlayToggle.checked = rivenEnabled;
+      if (rivenEnabled) await setRivenOverlayEnabled(true);
+    }
+  }
+
   // The version is shown twice: in the settings footer and in the About card, which is
   // the screen the licence names as a valid place for attribution.
   function renderAppVersionLabels(version) {
@@ -16676,6 +16739,7 @@ card.addEventListener('auxclick', function(e) {
 
   if (els.relicOverlayToggle) {
     els.relicOverlayToggle.addEventListener('change', function() {
+      localStorage.setItem(RELIC_OVERLAY_KEY, els.relicOverlayToggle.checked ? '1' : '0');
       setRelicOverlayEnabled(!!els.relicOverlayToggle.checked);
     });
     setRelicOverlayStatus('', 'Overlay disabled. Enable it before opening relics.');
@@ -16683,6 +16747,7 @@ card.addEventListener('auxclick', function(e) {
 
   if (els.rivenOverlayToggle) {
     els.rivenOverlayToggle.addEventListener('change', function() {
+      localStorage.setItem(RIVEN_OVERLAY_KEY, els.rivenOverlayToggle.checked ? '1' : '0');
       setRivenOverlayEnabled(!!els.rivenOverlayToggle.checked);
     });
     setRivenOverlayStatus('', 'Riven overlay disabled.');
@@ -16721,6 +16786,9 @@ card.addEventListener('auxclick', function(e) {
     // Handle selection change
     els.rivenDisplaySelect.addEventListener('change', function() {
       var selectedDisplayId = els.rivenDisplaySelect.value || null;
+      // Remembered across restarts, like the overlay switches themselves: which
+      // screen the game is on does not change between launches.
+      localStorage.setItem(RIVEN_DISPLAY_KEY, selectedDisplayId || '');
       if (window.electronAPI && window.electronAPI.setRivenOverlayDisplay) {
         window.electronAPI.setRivenOverlayDisplay(selectedDisplayId).then(function() {
           console.log('Riven display preference saved:', selectedDisplayId || 'Auto');
@@ -16818,6 +16886,20 @@ card.addEventListener('auxclick', function(e) {
     els.openUpstreamBtn.addEventListener('click', function() {
       openUpstreamRepo();
     });
+  }
+
+  if (els.openSponsorBtn) {
+    els.openSponsorBtn.addEventListener('click', function() {
+      openSponsorPage();
+    });
+  }
+
+  /* Show the funding row only when there is somewhere for it to go. SPONSOR_USERNAME
+   * empty means the project ships with no funding prompt, and the row stays hidden
+   * rather than offering a link to a page that does not exist. */
+  if (els.openSponsorBtn && SPONSOR_URL) {
+    var supportRow = document.getElementById('settings-support');
+    if (supportRow) supportRow.hidden = false;
   }
 
   if (els.mainMenuUpdateBtn) {
@@ -17508,6 +17590,14 @@ card.addEventListener('auxclick', function(e) {
     if (window.OrdisDock && typeof window.OrdisDock.sync === 'function') {
       window.OrdisDock.sync(panel);
     }
+    /* The split view needs the same signal, and this is the only place that knows a
+     * panel changed: panels are also opened from relic links, "Used By" jumps and the
+     * item modal, not just from the rail. Without this the split view kept a pane open
+     * for a panel the app had already navigated away from, which left the pane blank
+     * and the newly shown panel sitting loose outside any pane. */
+    if (window.OrdisSplit && typeof window.OrdisSplit.follow === 'function') {
+      window.OrdisSplit.follow(panel);
+    }
 
     // The Rivens tab reads a file the main process writes on every scan, so it
     // is read when the tab is opened rather than kept live.
@@ -17767,11 +17857,25 @@ card.addEventListener('auxclick', function(e) {
       var classSlug = rivenMarketClass(entry);
       var classConflict = entry.rivenType && entry.weaponClass && entry.rivenType !== entry.weaponClass;
 
+      // A riven is a mod, so the mod's own art is the picture that belongs here.
+      // The weapon art is the fallback for a class whose mod icon has not been
+      // fetched yet, and the grade tile is the fallback for no art at all.
+      var art = entry.modIconUrl || entry.iconUrl;
+      var thumb = art
+        ? '<div class="riven-row__thumb" data-grade="' + escapeRivenText(entry.grade || '') + '">' +
+            '<img class="riven-row__icon" src="' + escapeRivenText(art) + '" alt="" loading="lazy" ' +
+              'onerror="this.closest(\'.riven-row__thumb\')?.classList.add(\'is-broken\')">' +
+            '<span class="riven-row__grade" title="' + escapeRivenText(entry.gradeLabel || '') + '">' +
+              escapeRivenText(entry.grade || '?') + '</span>' +
+          '</div>'
+        : '<div class="riven-row__grade" data-grade="' + escapeRivenText(entry.grade || '?') +
+            '" title="' + escapeRivenText(entry.gradeLabel || '') + '">' +
+            escapeRivenText(entry.grade || '?') + '</div>';
+
       return '<article class="riven-row' + (listed ? ' is-listed' : '') + '" data-riven-id="' +
-        escapeRivenText(entry.id) + '">' +
-        '<div class="riven-row__grade" data-grade="' + escapeRivenText(entry.grade || '?') +
-          '" title="' + escapeRivenText(entry.gradeLabel || '') + '">' +
-          escapeRivenText(entry.grade || '?') + '</div>' +
+        escapeRivenText(entry.id) + '" tabindex="0" role="button" ' +
+        'aria-label="Details for ' + escapeRivenText(entry.weaponName || 'this riven') + '">' +
+        thumb +
         '<div class="riven-row__main">' +
           '<div class="riven-row__head">' +
             '<h3 class="riven-row__weapon">' + escapeRivenText(entry.weaponName || 'Unknown weapon') + '</h3>' +
@@ -17788,8 +17892,8 @@ card.addEventListener('auxclick', function(e) {
                 '<input class="riven-list-form__input" id="riven-price-' + escapeRivenText(entry.id) +
                   '" type="number" min="1" placeholder="250" value="' + escapeRivenText(entry.listedPrice || '') + '">' +
                 '<div class="riven-list-form__actions">' +
-                  '<button type="button" class="riven-action-btn is-primary" data-riven-action="confirm-list">Post</button>' +
-                  '<button type="button" class="riven-action-btn" data-riven-action="cancel-list">Cancel</button>' +
+                  '<button type="button" class="ordis-btn is-primary" data-riven-action="confirm-list">Post</button>' +
+                  '<button type="button" class="ordis-btn" data-riven-action="cancel-list">Cancel</button>' +
                 '</div>' +
                 '<p class="riven-list-form__hint">Posts a sell order on ' +
                   escapeRivenText(rivenMarketItemName(classSlug)) +
@@ -17797,14 +17901,171 @@ card.addEventListener('auxclick', function(e) {
                   (classConflict ? '. The grade data disagrees about the weapon class.' : '.') +
                 '</p>' +
               '</div>'
-            : '<button type="button" class="riven-action-btn" data-riven-action="list">List</button>') +
-          '<button type="button" class="riven-action-btn" data-riven-action="copy">Copy</button>' +
-          '<button type="button" class="riven-action-btn is-danger" data-riven-action="delete">Delete</button>' +
+            : '<button type="button" class="ordis-btn" data-riven-action="list">List</button>') +
+          '<button type="button" class="ordis-btn" data-riven-action="copy">Copy</button>' +
+          '<button type="button" class="ordis-btn is-danger" data-riven-action="delete">Delete</button>' +
         '</div>' +
       '</article>';
     }).join('');
 
     list.innerHTML = html;
+  }
+
+  /**
+   * One riven, opened by clicking its row.
+   *
+   * Everything shown here is already stored with the riven, so this never has to
+   * guess: the per-stat verdicts come from the community sheet at scan time and
+   * the reasons are the ones the grader used. Where a number is genuinely unknown
+   * it says so rather than showing a placeholder that looks like data.
+   */
+  function openRivenDetailModal(entry) {
+    if (!entry || !els.rivenDetailModal) return;
+
+    if (els.rivenDetailImg) {
+      var art = entry.modIconUrl || entry.iconUrl;
+      if (art) {
+        els.rivenDetailImg.src = art;
+        els.rivenDetailImg.alt = (entry.rivenName ? entry.rivenName + ' ' : '') + 'riven mod';
+        els.rivenDetailImg.classList.remove('is-hidden');
+      } else {
+        els.rivenDetailImg.removeAttribute('src');
+        els.rivenDetailImg.classList.add('is-hidden');
+      }
+    }
+    if (els.rivenDetailGrade) {
+      els.rivenDetailGrade.textContent = entry.grade || '?';
+      els.rivenDetailGrade.setAttribute('data-grade', entry.grade || '');
+      els.rivenDetailGrade.setAttribute('title', entry.gradeLabel || '');
+    }
+    if (els.rivenDetailName) {
+      els.rivenDetailName.textContent = entry.rivenName
+        ? entry.weaponName + ' ' + entry.rivenName
+        : (entry.weaponName || 'Riven');
+    }
+    if (els.rivenDetailSub) {
+      var bits = [];
+      if (entry.gradeLabel) bits.push(entry.gradeLabel);
+      if (entry.disposition != null) bits.push('disposition ' + entry.disposition);
+      if (entry.reqMasteryRank) bits.push('MR' + entry.reqMasteryRank);
+      if (entry.rivenType) bits.push(entry.rivenType);
+      if (entry.createdAt) {
+        var when = new Date(entry.createdAt);
+        if (!isNaN(when.getTime())) {
+          bits.push('scanned ' + when.toLocaleDateString() + ' ' + when.toLocaleTimeString().slice(0, 5));
+        }
+      }
+      els.rivenDetailSub.textContent = bits.join(' · ');
+    }
+
+    if (els.rivenDetailScore) {
+      var perfect = entry.perfectness != null
+        ? entry.perfectness + '% of a maximum roll'
+        : 'maximum roll unknown for this weapon';
+      var score = entry.score != null ? 'score ' + entry.score : 'no score';
+      els.rivenDetailScore.innerHTML =
+        '<div class="riven-detail-score__value">' + escapeRivenText(entry.perfectness != null ? entry.perfectness + '%' : '?') + '</div>' +
+        '<div class="riven-detail-score__meta">' + escapeRivenText(perfect) + '<br>' + escapeRivenText(score) + '</div>';
+    }
+
+    if (els.rivenDetailStats) {
+      var verdicts = {};
+      (entry.statVerdicts || []).forEach(function(v) { verdicts[v.name] = v.verdict; });
+      els.rivenDetailStats.innerHTML = (entry.stats || []).map(function(s) {
+        var verdict = verdicts[s.name] || 'unknown';
+        var note = {
+          good: 'a good stat for this weapon',
+          poor: 'a stat this weapon does not want',
+          harmless: 'neither good nor bad here',
+          harmful: 'actively bad for this weapon',
+          combo: 'part of a combo that counts as good',
+          unknown: 'no community verdict for this stat'
+        }[verdict] || '';
+        return '<div class="riven-detail-stat" data-sign="' + (s.isPositive ? 'positive' : 'negative') +
+          '" data-verdict="' + escapeRivenText(verdict) + '">' +
+          '<span class="riven-detail-stat__name">' + escapeRivenText(s.name) + '</span>' +
+          '<span class="riven-detail-stat__value">' + (s.isPositive ? '+' : '-') + escapeRivenText(s.value) + '%</span>' +
+          '<span class="riven-detail-stat__verdict">' + escapeRivenText(verdict) + '</span>' +
+          '<span class="riven-detail-stat__note">' + escapeRivenText(note) + '</span>' +
+          '</div>';
+      }).join('');
+    }
+
+    if (els.rivenDetailReasons) {
+      var reasons = (entry.reasons || []).filter(Boolean);
+      els.rivenDetailReasons.innerHTML = reasons.length
+        ? '<h3 class="riven-detail-section">Why this grade</h3><ul class="riven-detail-reason-list">' +
+          reasons.map(function(r) { return '<li>' + escapeRivenText(r) + '</li>'; }).join('') + '</ul>'
+        : '';
+    }
+
+    if (els.rivenDetailMarket) {
+      var market;
+      if (entry.wfmOrderId) {
+        market = '<h3 class="riven-detail-section">On Warframe.market</h3>' +
+          '<p>Listed' + (entry.listedPrice != null ? ' at ' + entry.listedPrice + ' platinum' : '') +
+          '. Warframe.market does not record which riven an order is for, so the trade itself is agreed in game.</p>';
+      } else {
+        market = '<h3 class="riven-detail-section">On Warframe.market</h3>' +
+          '<p>Not listed. Posting one puts a sell order under ' +
+          escapeRivenText(rivenMarketItemName(rivenMarketClass(entry))) +
+          ', which every ' + escapeRivenText(rivenMarketClass(entry)) + ' riven buyer will see.</p>';
+      }
+      els.rivenDetailMarket.innerHTML = market;
+    }
+
+    if (els.rivenDetailActions) {
+      els.rivenDetailActions.innerHTML =
+        (entry.wfmOrderId
+          ? '<span class="riven-detail-listed">Listed on the market</span>'
+          : '<button type="button" class="ordis-btn" data-riven-action="list">List</button>') +
+        '<button type="button" class="ordis-btn" data-riven-action="copy">Copy trade string</button>' +
+        '<button type="button" class="ordis-btn is-danger" data-riven-action="delete">Delete</button>';
+      els.rivenDetailActions.setAttribute('data-riven-id', entry.id);
+    }
+
+    els.rivenDetailModal.classList.remove('hidden');
+  }
+
+  function closeRivenDetailModal() {
+    if (!els.rivenDetailModal) return;
+    els.rivenDetailModal.classList.add('hidden');
+  }
+
+  /**
+   * The row actions, shared by the list and the details view so both do exactly
+   * the same thing. `focusAfter` names the element to return focus to when the
+   * list re-renders underneath, since the list is rebuilt from scratch.
+   */
+  function handleRivenAction(action, id) {
+    if (action === 'list') {
+      rivenListFormId = id;
+      renderRivenInventory();
+      var input = document.getElementById('riven-price-' + id);
+      if (input) input.focus();
+    } else if (action === 'cancel-list') {
+      rivenListFormId = null;
+      renderRivenInventory();
+    } else if (action === 'confirm-list') {
+      listRivenOnWfm(id);
+    } else if (action === 'copy') {
+      var entry = findRivenEntry(id);
+      if (!entry) return;
+      var text = buildRivenTradeString(entry);
+      // copyTextToClipboard falls back to execCommand, which is what
+      // actually works on a file:// page; the async Clipboard API is
+      // rejected as an insecure context here.
+      copyTextToClipboard(text).then(function(ok) {
+        if (ok) {
+          setRivenStatus('Copied: ' + text, 'ok');
+        } else {
+          setRivenStatus('Could not copy to the clipboard.', 'error');
+        }
+      });
+    } else if (action === 'delete') {
+      deleteRivenEntry(id);
+      closeRivenDetailModal();
+    }
   }
 
   async function loadRivenInventory(announce) {
@@ -17984,39 +18245,47 @@ card.addEventListener('auxclick', function(e) {
         var row = ev.target.closest('.riven-row');
         if (!row) return;
         var id = row.getAttribute('data-riven-id');
+        // The action buttons sit inside the row, so they are handled first and
+        // the click is not allowed to fall through and open the details view.
         var actionBtn = ev.target.closest('[data-riven-action]');
-        if (!actionBtn) return;
-        var action = actionBtn.getAttribute('data-riven-action');
-
-        if (action === 'list') {
-          rivenListFormId = id;
-          renderRivenInventory();
-          var input = document.getElementById('riven-subtype-' + id);
-          if (input) input.focus();
-        } else if (action === 'cancel-list') {
-          rivenListFormId = null;
-          renderRivenInventory();
-        } else if (action === 'confirm-list') {
-          listRivenOnWfm(id);
-        } else if (action === 'copy') {
-          var entry = findRivenEntry(id);
-          if (!entry) return;
-          var text = buildRivenTradeString(entry);
-          // copyTextToClipboard falls back to execCommand, which is what
-          // actually works on a file:// page; the async Clipboard API is
-          // rejected as an insecure context here.
-          copyTextToClipboard(text).then(function(ok) {
-            if (ok) {
-              setRivenStatus('Copied: ' + text, 'ok');
-            } else {
-              setRivenStatus('Could not copy to the clipboard.', 'error');
-            }
-          });
-        } else if (action === 'delete') {
-          deleteRivenEntry(id);
+        if (actionBtn) {
+          ev.stopPropagation();
+          handleRivenAction(actionBtn.getAttribute('data-riven-action'), id);
+          return;
         }
+        openRivenDetailModal(findRivenEntry(id));
+      });
+
+      // The rows are focusable, so they have to be openable from the keyboard too.
+      list.addEventListener('keydown', function(ev) {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return;
+        var row = ev.target.closest('.riven-row');
+        if (!row || ev.target.closest('[data-riven-action]')) return;
+        ev.preventDefault();
+        openRivenDetailModal(findRivenEntry(row.getAttribute('data-riven-id')));
       });
     }
+
+    var detailModal = $('#riven-detail-modal');
+    if (detailModal) {
+      var closeBtn = $('#riven-detail-close');
+      if (closeBtn) closeBtn.addEventListener('click', closeRivenDetailModal);
+      detailModal.addEventListener('click', function(ev) {
+        // A click on the backdrop, not on the dialog itself, closes it.
+        if (ev.target === detailModal) closeRivenDetailModal();
+      });
+      var actionBar = $('#riven-detail-actions');
+      if (actionBar) {
+        actionBar.addEventListener('click', function(ev) {
+          var actionBtn = ev.target.closest('[data-riven-action]');
+          if (!actionBtn) return;
+          handleRivenAction(actionBtn.getAttribute('data-riven-action'), actionBar.getAttribute('data-riven-id'));
+        });
+      }
+    }
+    document.addEventListener('keydown', function(ev) {
+      if (ev.key === 'Escape' && detailModal && !detailModal.classList.contains('hidden')) closeRivenDetailModal();
+    });
 
     var regradeBtn = $('#riven-regrade-btn');
     if (regradeBtn) {
@@ -18360,6 +18629,9 @@ card.addEventListener('auxclick', function(e) {
   initAppVersion();
   initAlwaysOnTopSetting();
   initAutoUpdateSetting();
+  // The overlay switches are restored after the change listeners above are wired,
+  // so a restored "on" is applied by the same path a click would take.
+  initOverlaySettings();
   initProfileFetchSetting();
   initRemovedProfileStorageMigration();
   // Restore the Warframe.market session at startup. Deliberately not behind the

@@ -329,8 +329,11 @@ body {
   color: var(--text-primary);
 }
 
-/* Cards: translucent tint + specular rim, no live filter. */
-.item-card,
+/* Cards: translucent tint + specular rim, no live filter.
+   .item-card was in this list and has been removed on purpose. Codex tiles are now
+   full bleed, so a tinted panel, a border and a corner around the artwork all went
+   with it - the request was that only the item's own image is seen. The market and
+   resource results keep the glass treatment; they are list rows, not artwork. */
 .market-item-card,
 .resource-result-card {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.035)) !important;
@@ -341,6 +344,7 @@ body {
   box-shadow: var(--glass-rim), 0 8px 22px rgba(0, 0, 0, 0.32);
   overflow: hidden;
 }
+
 
 .item-card:hover,
 .market-item-card:hover {
@@ -1864,7 +1868,105 @@ body.is-docking .dock-strip { opacity: 0.55; }
 .status-strip .ring-bg { stroke: rgba(255, 255, 255, 0.10); }
 .status-strip .ring-progress { stroke: rgba(94, 234, 212, 0.8); stroke-linecap: round; transform: rotate(-90deg); transform-origin: 50% 50%; }
 
-/* Tool actions in the titlebar. */
+/* ==========================================================
+   ONE BUTTON
+   ------------------------------------------------------------
+   Every button outside the titlebar is this tile, and it is
+   deliberately the titlebar's own look: uppercase Michroma on a
+   square, 26px surface. The Rivens tab had three of its own
+   (row actions, filter chips, sort buttons) and none of them
+   matched the titlebar or each other, which is what made the tab
+   read as a different application.
+
+   `!important` is needed to beat the legacy block in styles.css,
+   which forces radius 0, uppercase and a heavy weight behind the
+   design system's back. Same reason the pill group above carries
+   it.
+   ========================================================== */
+.ordis-btn,
+.rivens-action-btn,
+.rivens-grade-chip,
+.rivens-sort-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  height: 26px;
+  width: auto;
+  padding: 0 11px;
+  white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  border-radius: 0 !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: var(--text-secondary) !important;
+  font-family: var(--font-body) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.22);
+  cursor: pointer;
+  transition: background 0.13s ease, color 0.13s ease, border-color 0.13s ease;
+}
+
+.ordis-btn:hover:not(:disabled),
+.rivens-action-btn:hover:not(:disabled),
+.rivens-grade-chip:hover:not(:disabled),
+.rivens-sort-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14) !important;
+  border-color: var(--border-accent) !important;
+  color: #fff !important;
+}
+
+.ordis-btn:focus-visible,
+.rivens-action-btn:focus-visible,
+.rivens-grade-chip:focus-visible,
+.rivens-sort-btn:focus-visible {
+  outline: 2px solid rgba(94, 234, 212, 0.75);
+  outline-offset: 2px;
+}
+
+.ordis-btn:disabled,
+.rivens-action-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Selected / on. */
+.ordis-btn.is-active,
+.rivens-grade-chip.is-active,
+.rivens-sort-btn.is-active {
+  background: rgba(94, 234, 212, 0.16) !important;
+  border-color: rgba(94, 234, 212, 0.55) !important;
+  color: var(--text-accent) !important;
+  box-shadow: inset 0 -2px 0 rgba(94, 234, 212, 0.85);
+}
+
+.ordis-btn.is-primary,
+.rivens-action-btn.is-primary {
+  background: linear-gradient(180deg, rgba(153, 246, 228, 0.95), rgba(45, 212, 191, 0.95)) !important;
+  border-color: rgba(204, 251, 241, 0.70) !important;
+  color: #04211c !important;
+}
+
+.ordis-btn.is-danger:hover,
+.rivens-action-btn.is-danger:hover {
+  color: var(--red) !important;
+  border-color: rgba(251, 113, 133, 0.5) !important;
+}
+
+.ordis-btn .material-icons-round,
+.rivens-action-btn .material-icons-round {
+  font-size: 14px;
+}
+
+/* Tool actions in the titlebar.
+ *
+   Left exactly as they were, including the teal underline sweep the legacy block
+   puts on hover: this is the look everything else is now matched to, so it is the
+   one thing here that must not change. */
 .titlebar-tools {
   display: flex;
   align-items: center;
@@ -1895,7 +1997,20 @@ body.is-docking .dock-strip { opacity: 0.55; }
 
 .titlebar-tools .nav-item:hover { background: rgba(255, 255, 255, 0.14); color: #fff; }
 .titlebar-tools .material-icons-round { font-size: 15px; }
-.titlebar-tools .nav-update-item { max-width: 190px; overflow: hidden; }
+/* The four tiles share the row with three 46px window buttons. Capping the update
+   tile at 190px cut "Check for Updates" off mid-word and left it butted against
+   the minimise button; it now sizes to its label and ellipsises only when the row
+   genuinely runs out of room. */
+.titlebar-tools .nav-update-item {
+  min-width: 0;
+  max-width: none;
+  overflow: hidden;
+}
+.titlebar-tools .nav-update-item .nav-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .titlebar-tools #main-menu-update-details { display: none; }
 
 @media (max-width: 1180px) {
@@ -2039,7 +2154,6 @@ body.is-docking .dock-strip { opacity: 0.55; }
 .simaris-input-row,
 .search-clear,
 .mission-type-toggle,
-.item-card,
 .item-card-check,
 .item-level-btn,
 .mod-card.mod-card-modern,
@@ -2051,6 +2165,12 @@ body.is-docking .dock-strip { opacity: 0.55; }
 .item-card.mod-item.mastered .mod-card.mod-card-modern .mod-card-check {
   border-radius: var(--radius-md) !important;
 }
+
+/* .item-card used to be in the list above and has been taken out of it on purpose.
+   Codex tiles are now full bleed: the corner is what made them read as tiles, and the
+   artwork carries its own silhouette. Leaving it in would need an !important of its
+   own to undo, which is how the next person ends up fighting two of them. */
+
 
 .scan-progress-fill,
 .item-card-check,
@@ -3053,14 +3173,13 @@ input[type="password"].wfm-input {
   width: 260px;
 }
 
+/* The sort group is a plain row now: it used to be a dark inset box with
+   borderless buttons inside, which read as a different control family to the
+   chips sitting a few pixels away. */
 .rivens-sort {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 3px;
-  border-radius: 10px;
-  background: rgba(6, 11, 16, 0.6);
-  border: 1px solid var(--border-color);
 }
 
 .rivens-sort-label {
@@ -3070,68 +3189,6 @@ input[type="password"].wfm-input {
   text-transform: uppercase;
   color: var(--text-dim);
   padding: 0 4px 0 6px;
-}
-
-.rivens-sort-btn {
-  padding: 4px 9px;
-  border-radius: 7px;
-  font-family: var(--font-body);
-  font-size: 10px;
-  color: var(--text-secondary);
-  background: transparent;
-  border: 1px solid transparent;
-  cursor: pointer;
-}
-
-.rivens-sort-btn:hover {
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.rivens-sort-btn.is-active {
-  color: #0a1016;
-  background: rgba(94, 234, 212, 0.85);
-  border-color: rgba(94, 234, 212, 0.9);
-}
-
-.rivens-action-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 10px;
-  border-radius: 9px;
-  font-family: var(--font-body);
-  font-size: 10px;
-  color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--border-color);
-  cursor: pointer;
-}
-
-.rivens-action-btn:hover:not(:disabled) {
-  color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.09);
-  border-color: var(--border-accent);
-}
-
-.rivens-action-btn:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.rivens-action-btn .material-icons-round {
-  font-size: 14px;
-}
-
-.rivens-action-btn.is-primary {
-  color: #0a1016;
-  background: rgba(94, 234, 212, 0.85);
-  border-color: rgba(94, 234, 212, 0.9);
-}
-
-.rivens-action-btn.is-danger:hover {
-  color: var(--red);
-  border-color: rgba(251, 113, 133, 0.5);
 }
 
 .rivens-grade-filter {
@@ -3144,28 +3201,6 @@ input[type="password"].wfm-input {
 
 .rivens-filter-spacer {
   flex: 1;
-}
-
-.rivens-grade-chip {
-  padding: 4px 11px;
-  border-radius: 999px;
-  font-family: var(--font-body);
-  font-size: 10px;
-  color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--border-color);
-  cursor: pointer;
-}
-
-.rivens-grade-chip:hover {
-  color: var(--text-primary);
-  border-color: var(--border-accent);
-}
-
-.rivens-grade-chip.is-active {
-  color: #0a1016;
-  background: rgba(94, 234, 212, 0.85);
-  border-color: rgba(94, 234, 212, 0.9);
 }
 
 .rivens-status {
@@ -3231,7 +3266,7 @@ input[type="password"].wfm-input {
 
 .riven-row {
   display: grid;
-  grid-template-columns: 46px minmax(0, 1fr) auto;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
   align-items: start;
   gap: 12px;
   padding: 11px 13px;
@@ -3239,6 +3274,10 @@ input[type="password"].wfm-input {
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid var(--border-color);
   box-shadow: var(--glass-rim);
+  /* The whole row opens the details view, so it has to look pressable. The
+     action buttons inside stop the click from reaching the row. */
+  cursor: pointer;
+  transition: background 0.13s ease, border-color 0.13s ease;
 }
 
 .riven-row:hover {
@@ -3246,8 +3285,50 @@ input[type="password"].wfm-input {
   border-color: var(--border-accent);
 }
 
+.riven-row:focus-visible {
+  outline: 2px solid rgba(94, 234, 212, 0.75);
+  outline-offset: 2px;
+}
+
 .riven-row.is-listed {
   border-color: rgba(94, 234, 212, 0.4);
+}
+
+/* The weapon's own art, with the grade sitting on top of it. A broken or
+   missing image collapses to the plain grade tile rather than a torn hole. */
+.riven-row__thumb {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-color);
+}
+
+.riven-row__icon {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.riven-row__thumb .riven-row__grade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 17px;
+  border-radius: 0;
+  font-size: 11px;
+  background: var(--riven-grade-color, var(--text-dim));
+}
+
+.riven-row__thumb.is-broken .riven-row__icon { display: none; }
+.riven-row__thumb.is-broken .riven-row__grade {
+  position: static;
+  height: 100%;
+  font-size: 17px;
 }
 
 .riven-row__grade {
@@ -3266,6 +3347,172 @@ input[type="password"].wfm-input {
 .riven-row__grade[data-grade="A"] { --riven-grade-color: #7dd3fc; }
 .riven-row__grade[data-grade="B"] { --riven-grade-color: #fbbf24; }
 .riven-row__grade[data-grade="C"] { --riven-grade-color: #fb7185; }
+
+/* ==========================================================
+   RIVEN DETAILS
+   ========================================================== */
+.riven-detail-modal {
+  width: min(640px, 92vw);
+}
+
+.riven-detail-header-wrap {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.riven-detail-media {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  flex: 0 0 auto;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-color);
+}
+
+.riven-detail-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.riven-detail-img.is-hidden { display: none; }
+
+.riven-detail-grade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 19px;
+  border-radius: 0;
+  font-size: 12px;
+}
+
+.riven-detail-kicker {
+  font-family: var(--font-display);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.riven-detail-subtitle {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.riven-detail-score {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-color);
+}
+
+.riven-detail-score__value {
+  font-family: var(--font-display);
+  font-size: 30px;
+  line-height: 1;
+  color: var(--text-accent);
+}
+
+.riven-detail-score__meta {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.riven-detail-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.riven-detail-stat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--text-dim);
+}
+
+.riven-detail-stat[data-sign="positive"] { border-left-color: #4ade80; }
+.riven-detail-stat[data-sign="negative"] { border-left-color: #fb7185; }
+.riven-detail-stat[data-verdict="good"] { border-left-color: #5eead4; }
+.riven-detail-stat[data-verdict="poor"],
+.riven-detail-stat[data-verdict="harmful"] { border-left-color: #fb7185; }
+
+.riven-detail-stat__name { font-size: 12px; color: var(--text-primary); }
+.riven-detail-stat__value { font-size: 12px; }
+.riven-detail-stat[data-sign="positive"] .riven-detail-stat__value { color: #4ade80; }
+.riven-detail-stat[data-sign="negative"] .riven-detail-stat__value { color: #fb7185; }
+
+.riven-detail-stat__verdict {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 2px 7px;
+}
+
+.riven-detail-stat__note {
+  grid-column: 1 / -1;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.riven-detail-section {
+  margin: 18px 0 6px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.riven-detail-reason-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+
+.riven-detail-market p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.riven-detail-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.riven-detail-listed {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--text-accent);
+}
 
 .riven-row__main {
   min-width: 0;
@@ -3347,11 +3594,13 @@ input[type="password"].wfm-input {
 
 .riven-row__actions {
   display: flex;
-  align-items: flex-start;
-  gap: 5px;
+  align-items: center;
+  gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-end;
-  max-width: 190px;
+  /* Wide enough for List / Copy / Delete on one line at the shared 26px tile
+     size; the 190px it used to be forced Delete onto a second row. */
+  max-width: 280px;
 }
 
 .riven-list-form {
@@ -3664,3 +3913,333 @@ input[type="number"].wfm-input {
 .orders-list .order-row:not(.order-header) {
   font-size: 12px;
 }
+
+/* ==========================================================
+   SPLIT VIEW - rail, seamless panes, full-bleed tiles
+   ==========================================================
+
+   SEAMLESSNESS
+   -----------
+   The whole point of a split is that it reads as one surface. A gap between the
+   panes shows the desktop through it, and rounded corners do the same at the top,
+   so both are removed: the panes are a flex row with no gap, square corners, and
+   nothing floats above them. The only thing marking the boundary is a one pixel
+   rule, which is enough to say "these are separate" without saying "these are two
+   windows". */
+
+.split-workspace {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.split-workspace.is-drop::after {
+  /* Preview only. It sits inside the workspace, so it cannot create the gap it is
+     warning about. */
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 2px solid var(--text-accent);
+  opacity: 0.5;
+}
+
+.split-panes {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.split-panes.is-empty { display: none; }
+
+.split-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* Square, always. A rounded corner here is a hole in the middle of the window. */
+  border-radius: 0;
+  background: var(--bg-primary);
+}
+
+.split-panes.is-split .split-pane[data-slot='primary'] {
+  flex: 0 0 calc(var(--split-ratio, 0.5) * 100%);
+}
+
+.split-pane + .split-divider + .split-pane { border-left: 0; }
+
+.split-pane-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.02);
+  user-select: none;
+}
+
+.split-pane-icon {
+  font-size: 16px;
+  color: var(--text-accent);
+}
+
+.split-pane-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.split-pane-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.split-pane-close:hover { background: rgba(255, 90, 90, 0.16); color: #ff8a8a; }
+.split-pane-close .material-icons-round { font-size: 16px; }
+
+.split-pane-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The panels keep their own scrolling and sizing; this only makes sure a panel that
+   used to be a direct child of the app container still fills its pane. */
+.split-pane-body > * {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.split-divider {
+  flex: 0 0 1px;
+  position: relative;
+  background: var(--border-color);
+  cursor: col-resize;
+}
+
+/* A wider invisible hit area than the line itself. A one pixel divider is honest
+   about where it is and impossible to grab. */
+.split-divider::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  right: -4px;
+}
+
+.split-divider:hover,
+body.is-resizing-split .split-divider {
+  background: var(--text-accent);
+}
+
+/* ---- The rail ---- */
+
+.split-rail {
+  flex: 0 0 60px;
+  width: 60px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  border-right: 1px solid var(--border-color);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.split-rail::-webkit-scrollbar { display: none; }
+
+.split-rail-btn {
+  flex: 0 0 auto;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.split-rail-btn .material-icons-round { font-size: 21px; }
+
+.split-rail-btn:hover { background: rgba(255, 255, 255, 0.07); color: var(--text-primary); }
+
+/* The marker sits on the rail's own edge, so the active tab reads as part of the
+   content area rather than a button floating in a sidebar. */
+.split-rail-btn.is-active {
+  background: rgba(94, 234, 212, 0.14);
+  color: var(--text-accent);
+}
+
+.split-rail-btn.is-active::before {
+  content: '';
+  position: absolute;
+  left: -9px;
+  top: 50%;
+  width: 3px;
+  height: 22px;
+  transform: translateY(-50%);
+  border-radius: 0 3px 3px 0;
+  background: var(--text-accent);
+}
+
+/* Open in the second slot: shown, but not the panel you are looking at. */
+.split-rail-btn.is-open:not(.is-active) { color: var(--text-secondary); }
+
+.split-rail-btn.is-drop {
+  background: rgba(94, 234, 212, 0.24);
+  color: var(--text-accent);
+}
+
+.split-ghost {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 5200;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(12, 26, 34, 0.95);
+  border: 1px solid var(--border-accent);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.split-ghost .material-icons-round { font-size: 17px; color: var(--text-accent); }
+
+body.is-split-dragging { cursor: grabbing; }
+body.is-split-dragging * { cursor: grabbing !important; }
+
+/* The rail is the tab strip now. Hiding it by class leaves the dock's own code and
+   saved layout untouched, so nothing that still reaches for the strip breaks. */
+body.has-split-rail .dock-strip { display: none !important; }
+
+/* The strip used to sit over the last row of every list. With it gone, that padding
+   is dead space. */
+body.has-split-rail .content,
+body.has-split-rail .recommendations-content,
+body.has-split-rail .resource-search-content,
+body.has-split-rail .settings-content { padding-bottom: 0 !important; }
+
+/* ==========================================================
+   FULL-BLEED ITEM TILES
+   ==========================================================
+   The corner is what makes a tile look like a tile. Removing it, and the border and
+   the inner shadow with it, leaves the item's own artwork as the whole shape, which
+   is the point: the art is already a finished silhouette and a frame around it only
+   clips it. */
+
+.riven-row__thumb {
+  border-radius: 0;
+  border: 0;
+  box-shadow: none;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.riven-row__icon { object-fit: contain; }
+
+/* The grade still needs to be readable on top of arbitrary artwork, so it keeps a
+   scrim rather than a box. */
+.riven-row__thumb .riven-row__grade {
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.92), rgba(0, 0, 0, 0.45));
+}
+
+.riven-row__thumb.is-broken .riven-row__grade { background: var(--riven-grade-color, var(--text-dim)); }
+
+/* ==========================================================
+   MOD NAMES AS MOD CARDS
+   ==========================================================
+   A riven's stats are mods, and a mod in Warframe is a specific shape: a slanted
+   card, gold text, a coloured bar. Rendering the name in that shape says what it is
+   without a cropped screenshot of a mod that may not load, and it stays legible at
+   any width because it is text rather than artwork. */
+
+.riven-row__mod {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px 3px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: #e8d9a0;
+  background: linear-gradient(100deg, rgba(58, 48, 22, 0.92), rgba(28, 26, 20, 0.92));
+  /* The slant is what makes it read as a mod and not a chip. clip-path keeps the
+     background and the text inside the same outline. */
+  clip-path: polygon(7px 0, 100% 0, calc(100% - 7px) 100%, 0 100%);
+  border: 0;
+  white-space: nowrap;
+}
+
+.riven-row__mod .material-icons-round { font-size: 13px; opacity: 0.85; }
+
+.riven-row__mod--curse { color: #f0a9a9; background: linear-gradient(100deg, rgba(62, 26, 26, 0.92), rgba(30, 20, 20, 0.92)); }
+
+.riven-row__mod-value {
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+.riven-row__mod--curse .riven-row__mod-value { color: #ffc9c9; }
+
+/* The codex tiles are a different component from the riven rows, so they need the
+   full-bleed treatment in their own right. Same reasoning: the corner is what makes a
+   tile read as a tile, and the artwork already has a finished silhouette of its own. */
+.item-card {
+  border-radius: 0;
+  border: 0;
+  box-shadow: none;
+  background: rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.item-card img {
+  border-radius: 0;
+  object-fit: contain;
+}
+
+.item-card:hover { box-shadow: none; }
+
+/* The name strip stays, because an unlabelled image is not a codex entry. It is the
+   only chrome left on the tile. */
+.item-card-name { border-radius: 0; }

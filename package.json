@@ -13,13 +13,14 @@
     "verify:riven-bases": "node verify-riven-bases.js"
   },
   "author": "Kawaoii",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "LicenseRef-MIT-With-Attribution",
   "type": "commonjs",
   "devDependencies": {
     "electron": "^41.0.3",
     "electron-builder": "^26.8.1"
   },
   "dependencies": {
+    "@napi-rs/system-ocr": "^1.2.0",
     "electron-updater": "^6.6.2",
     "tesseract.js": "^7.0.0"
   },
@@ -41,11 +42,11 @@
       "category": "Utility"
     },
     "mac": {
-        "target": [
-          "dmg",
-          "zip"
-        ],
-        "artifactName": "Ordis-${version}-${arch}.${ext}"
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "artifactName": "Ordis-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -58,24 +59,25 @@
         "repo": "Ordis"
       }
     ],
-      "files": [
-        "main.js",
-        "preload.js",
-        "relic-overlay.html",
-        "riven-overlay.html",
-        "riven-overlay-dashboard.html",
-        "index.html",
-        "styles.css",
-        "ordis-design.css",
-        "renderer.js",
-        "dock.js",
-        "market.js",
-        "wfm-contracts.js",
-        "starchart.js",
-        "riven-data.js",
-        "riven-parser.js",
-        "assets/**/*"
-      ]
+    "files": [
+      "main.js",
+      "preload.js",
+      "relic-overlay.html",
+      "riven-overlay.html",
+      "riven-overlay-dashboard.html",
+      "index.html",
+      "styles.css",
+      "ordis-design.css",
+      "renderer.js",
+      "dock.js",
+      "splitview.js",
+      "market.js",
+      "wfm-contracts.js",
+      "starchart.js",
+      "riven-data.js",
+      "riven-parser.js",
+      "assets/**/*"
+    ]
   },
   "allowScripts": {
     "electron@41.0.3": true

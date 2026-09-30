@@ -2,36 +2,366 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Riven Overlay</title>
   <style>
+    /* Warframe's own language, not a generic dark panel: angled corners, a gold
+       rule, dark slate behind it. No backdrop-filter anywhere — a transparent
+       compositing window turns every filter into one smeared layer. */
+
+    @font-face {
+      font-family: 'Michroma';
+      font-style: normal;
+      font-weight: 400;
+      font-display: block;
+      src: url('assets/fonts/Michroma-Regular.woff2') format('woff2');
+    }
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { 
-      font-family: 'Rajdhani', sans-serif; 
-      background: transparent; 
-      color: #e4e6ea; 
-      width: 320px; 
-      height: 180px; 
+
+    :root {
+      --gold: #e8b44a;
+      --gold-dim: rgba(232, 180, 74, 0.55);
+      --slate: rgba(10, 14, 20, 0.93);
+      --slate-deep: rgba(5, 8, 12, 0.95);
+      --edge: rgba(232, 180, 74, 0.38);
+      --text: #e8eef2;
+      --dim: #8fa3ad;
+      --good: #5eead4;
+      --bad: #fb7185;
+      --cut: 14px;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: transparent;
       overflow: hidden;
       user-select: none;
       pointer-events: none;
+      font-family: 'Michroma', 'Segoe UI', system-ui, sans-serif;
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
     }
-    #overlay-content {
-      width: 100%;
-      height: 100%;
+
+    /* Top of the screen now: the card carries a tier per stat and a meter, so it
+       is tall enough that the bottom of the frame is where the game's own UI
+       lives. The two riven cards sit in the middle either way. */
+    #overlay-root {
+      position: absolute;
+      left: 50%;
+      top: 3%;
+      transform: translateX(-50%);
+      width: min(620px, 64vw);
+      display: none;
+    }
+
+    #overlay-root.is-visible { display: block; }
+
+    /* The angled panel. Warframe never draws a plain rounded rectangle. */
+    .panel {
+      position: relative;
+      padding: 11px 16px 13px;
+      background: linear-gradient(180deg, var(--slate) 0%, var(--slate-deep) 100%);
+      border: 1px solid var(--edge);
+      clip-path: polygon(
+        var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)),
+        calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut)
+      );
+      box-shadow: 0 10px 34px rgba(0, 0, 0, 0.6);
+    }
+
+    /* Gold hairline along the top edge, the way the game underlines its panels. */
+    .panel::before {
+      content: "";
+      position: absolute;
+      left: var(--cut);
+      right: 0;
+      top: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--gold), rgba(232, 180, 74, 0));
+    }
+
+    .kicker {
+      font-size: 8.5px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--gold);
+      margin-bottom: 5px;
+    }
+
+    .head {
       display: flex;
-      flex-direction: column;
+      align-items: center;
+      gap: 11px;
     }
+
+    /* Grade as a chevron, so it reads as a shape and not just a letter. */
+    .grade {
+      flex: 0 0 auto;
+      width: 34px;
+      height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      font-weight: 700;
+      color: #0b0e12;
+      background: var(--dim);
+      clip-path: polygon(50% 0, 100% 28%, 100% 72%, 50% 100%, 0 72%, 0 28%);
+    }
+    .grade[data-grade="S"] { background: var(--good); }
+    .grade[data-grade="A"] { background: #7dd3fc; }
+    .grade[data-grade="B"] { background: var(--gold); }
+    .grade[data-grade="C"] { background: var(--bad); }
+    .grade[data-grade="?"] { background: #46525c; color: var(--dim); }
+
+    .name {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .score {
+      flex: 0 0 auto;
+      text-align: right;
+      font-size: 9px;
+      letter-spacing: 0.08em;
+      color: var(--dim);
+      line-height: 1.5;
+    }
+    .score b { display: block; font-size: 12px; color: var(--text); font-weight: 400; }
+
+    /* Perfectness as a bar rather than a number you have to trust. */
+    .meter {
+      margin: 8px 0 9px;
+      height: 3px;
+      background: rgba(255, 255, 255, 0.09);
+      overflow: hidden;
+    }
+    .meter > i {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, var(--gold), var(--good));
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 3px 16px;
+    }
+
+    .stat {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      font-size: 11px;
+      border-left: 2px solid transparent;
+      padding-left: 7px;
+    }
+    .stat[data-sign="positive"] { border-left-color: var(--good); }
+    .stat[data-sign="negative"] { border-left-color: var(--bad); }
+
+    .stat .sym { flex: 0 0 auto; width: 9px; font-size: 9px; color: var(--dim); }
+    .stat[data-verdict="good"] .sym { color: var(--good); }
+    .stat[data-verdict="poor"] .sym,
+    .stat[data-verdict="harmful"] .sym { color: var(--bad); }
+    .stat[data-verdict="combo"] .sym { color: var(--gold); }
+
+    /* The tier is the thing that makes the score legible: one glance says which
+       stat is carrying the roll and which is dead weight. */
+    .stat .tier {
+      flex: 0 0 auto;
+      width: 13px;
+      height: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      color: var(--dim);
+    }
+    .stat .tier[data-tier="S"] { color: #0b0e12; background: var(--good); border-color: var(--good); }
+    .stat .tier[data-tier="A"] { color: #0b0e12; background: #7dd3fc; border-color: #7dd3fc; }
+    .stat .tier[data-tier="B"] { color: #0b0e12; background: var(--gold); border-color: var(--gold); }
+    .stat .tier[data-tier="C"] { color: #0b0e12; background: var(--bad); border-color: var(--bad); }
+
+    .stat .n {
+      flex: 1 1 auto;
+      min-width: 0;
+      color: #cddbe2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .stat .v { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+    .stat[data-sign="positive"] .v { color: var(--good); }
+    .stat[data-sign="negative"] .v { color: var(--bad); }
+
+    /* The roll this one replaces, read off the other card. */
+    .before {
+      margin-top: 9px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .before h4 {
+      font-size: 8px;
+      font-weight: 400;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--dim);
+      margin-bottom: 5px;
+    }
+    .before .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .before .stat { font-size: 10px; }
+
+    .note {
+      margin-top: 8px;
+      font-size: 9.5px;
+      line-height: 1.5;
+      color: var(--dim);
+    }
+
+    .pending .name, .error .kicker { color: var(--gold); }
+    .pending { animation: pulse 1.1s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.62; } }
+
+    .error { border-color: rgba(251, 113, 133, 0.5); }
+    .error .kicker { color: var(--bad); }
+    .error .msg { font-size: 10.5px; line-height: 1.55; color: #ffd7db; }
   </style>
 </head>
 <body>
-  <div id="overlay-content"></div>
+  <div id="overlay-root"></div>
   <script>
-    window.renderRivenOverlay = function(data) {
-      const container = document.getElementById('overlay-content');
-      if (data && data.html) {
-        container.innerHTML = data.html;
+    // Everything is inserted with textContent, never innerHTML: these strings come
+    // off a screen read of the game.
+    function el(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = String(text);
+      return node;
+    }
+
+    // The community sheet's verdict per stat, keyed by the name shown, so a good
+    // stat can carry a symbol that means something rather than just a sign.
+    var VERDICT_SYMBOL = {
+      good: '▲',
+      poor: '▼',
+      harmful: '✖',
+      harmless: '●',
+      combo: '◆',
+      unknown: '·'
+    };
+
+    function statRow(stat, tiers, compact) {
+      var tier = null;
+      for (var i = 0; i < (tiers || []).length; i++) {
+        if (tiers[i] && tiers[i].name === stat.name) { tier = tiers[i]; break; }
       }
+      var row = el('div', 'stat');
+      row.setAttribute('data-sign', stat.isPositive ? 'positive' : 'negative');
+      row.setAttribute('data-verdict', (tier && tier.verdict) || 'unknown');
+
+      if (!compact) {
+        var badge = el('span', 'tier', (tier && tier.tier) || '?');
+        badge.setAttribute('data-tier', (tier && tier.tier) || '?');
+        badge.title = tier ? (tier.verdict + (tier.ratio != null ? '  ·  ' + tier.ratio + '% of the maximum roll' : '')) : 'No verdict';
+        row.appendChild(badge);
+      }
+      row.appendChild(el('span', 'n', stat.name));
+      row.appendChild(el('span', 'v', (stat.isPositive ? '+' : '-') + stat.value + '%'));
+      return row;
+    }
+
+    function statBlock(stats, tiers, compact) {
+      var box = el('div', 'stats');
+      (stats || []).forEach(function (stat) { box.appendChild(statRow(stat, tiers, compact)); });
+      return box;
+    }
+
+    function renderRoll(model) {
+      var panel = el('div', 'panel');
+      panel.appendChild(el('div', 'kicker', model.side === 'previous' ? 'Your riven' : 'New roll'));
+
+      var head = el('div', 'head');
+      var grade = el('div', 'grade', model.grade || '?');
+      grade.setAttribute('data-grade', model.grade || '?');
+      head.appendChild(grade);
+      head.appendChild(el('div', 'name', (model.weaponName || 'Unknown weapon') +
+        (model.rivenName ? ' ' + model.rivenName : '')));
+
+      var score = el('div', 'score');
+      if (model.perfectness != null) {
+        score.appendChild(el('b', null, model.perfectness + '%'));
+        score.appendChild(document.createTextNode('of max roll'));
+      } else {
+        score.appendChild(el('b', null, '—'));
+        score.appendChild(document.createTextNode('max unknown'));
+      }
+      if (model.score != null) score.appendChild(document.createTextNode('score ' + model.score));
+      head.appendChild(score);
+      panel.appendChild(head);
+
+      var meter = el('div', 'meter');
+      var fill = document.createElement('i');
+      // Capped at 100: a riven can exceed a "maximum roll" in the sheet's terms
+      // and a bar that overflows its track reads as a broken widget.
+      fill.style.width = Math.max(0, Math.min(100, model.perfectness != null ? model.perfectness : 0)) + '%';
+      meter.appendChild(fill);
+      panel.appendChild(meter);
+
+      panel.appendChild(statBlock(model.stats, model.verdicts, false));
+
+      if (model.hasPrevious && (model.previousStats || []).length) {
+        var before = el('div', 'before');
+        before.appendChild(el('h4', null, 'Replacing'));
+        before.appendChild(statBlock(model.previousStats, model.previousVerdicts, true));
+        panel.appendChild(before);
+      }
+
+      if (model.reasons && model.reasons.length) {
+        panel.appendChild(el('p', 'note', model.reasons[0]));
+      }
+
+      return panel;
+    }
+
+    function renderPending(model) {
+      var panel = el('div', 'panel pending');
+      panel.appendChild(el('div', 'kicker', 'Riven'));
+      var head = el('div', 'head');
+      head.appendChild(el('div', 'name', 'Reading the reroll screen'));
+      panel.appendChild(head);
+      return panel;
+    }
+
+    function renderError(model) {
+      var panel = el('div', 'panel error');
+      panel.appendChild(el('div', 'kicker', 'Reroll not read'));
+      panel.appendChild(el('div', 'msg', model.error || 'The screen could not be read.'));
+      return panel;
+    }
+
+    window.renderRivenOverlay = function (model) {
+      var root = document.getElementById('overlay-root');
+      if (!root) return;
+      root.textContent = '';
+      if (!model) { root.classList.remove('is-visible'); return; }
+      if (model.pending) root.appendChild(renderPending(model));
+      else if (model.success) root.appendChild(renderRoll(model));
+      else root.appendChild(renderError(model));
+      root.classList.add('is-visible');
+    };
+
+    window.clearRivenOverlay = function () {
+      var root = document.getElementById('overlay-root');
+      if (!root) return;
+      root.textContent = '';
+      root.classList.remove('is-visible');
     };
   </script>
 </body>

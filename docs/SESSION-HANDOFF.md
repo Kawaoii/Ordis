@@ -1,5 +1,12 @@
 # Ordis — session handoff
 
+> **Partly superseded.** The riven-reading section below predates the discovery that
+> Warframe keeps each riven's full summary as a readable string in its own process
+> memory, and the OCR pipeline described here was later measured at roughly 50% correct
+> stat values on real frames of the riven screen. Read [FEATURE-NOTES.md](FEATURE-NOTES.md)
+> for the current state, especially its "BREAKTHROUGH" section. What follows is still
+> accurate for the relic overlay, the parser and the riven data tables.
+
 Written so work can continue after a reboot or a lost conversation. Everything
 here is also in Git history and in the dated backups, so nothing depends on
 this file.
@@ -85,6 +92,36 @@ Result on that capture: previous riven 3/3 stats, new riven 2/3. The third,
 the screen as one flat stream merges them ("Ocucor Visilis Ocucor Sci-zetides"),
 because both cards' text sits at the same height.
 
+### Per-card cropping (done, not yet committed at time of writing)
+
+Both cards are now cropped and read on their own, so they can never merge:
+
+- `RIVEN_OVERLAY_CARDS` in `main.js` holds the two regions. Measured on the real
+  frame by eye against a grid overlay, not guessed: left card x 0.275..0.410, right
+  card x 0.410..0.578, both y 0.420..0.775. The gap between the cards is empty from
+  0.390 to 0.430, so the split sits in the middle of a 0.04-wide margin.
+- The right card is the new roll and is what gets graded. The left card is the roll
+  it replaces, so the before/after overlay now reads the previous roll off the same
+  frame instead of remembering the last scan, and survives a restart. It is only
+  used when it grades as the same weapon, and any doubtful read falls back to the
+  remembered roll.
+- `PSM.SINGLE_COLUMN` instead of `SINGLE_BLOCK`, and ~3.4x upscale. A card is one
+  centred column under a picture; `SINGLE_BLOCK` pulled the card art and the button
+  below it in, which is where the junk name candidates came from.
+- Replaying the saved frame through the shipped numbers: left card 3/3 stats, right
+  card 3/3 including `+112.1% Slash`, both weapon names first in the candidate list.
+  Two OCR passes cost about 2.5s including worker start, so it is not a perf worry.
+
+Three parser bugs came out of that replay, all in `riven-parser.js`:
+
+- `v &x0.72 Damage to Infested` was read as a **72% penalty** instead of the 28%
+  shortfall. A marked fraction under 1 is now read like a bare one. This was the
+  dangerous kind of bug: a wrong value grades silently.
+- `+88 .3% Status Duration` was read as **3%**. A space inside a decimal is now
+  closed before the value is picked.
+- `+112.1% \_Slash` was dropped because debris sat between the value and the name.
+  Any non-alphanumeric run is now skipped before the name is read.
+
 ## Environment notes
 
 - Launch Electron **without** `-WindowStyle Hidden`, and never let a shell
@@ -102,8 +139,9 @@ because both cards' text sits at the same height.
 
 ## Next work
 
-1. Second live OCR test: confirm `+112.1% Slash` now parses, and bake
-   per-card cropping into `main.js` so the two cards never merge.
+1. One live reroll to confirm the per-card read in the app itself: both cards
+   graded, the diff showing the on-screen previous roll. Everything up to that
+   point was verified by replaying the saved frame, not in game.
 2. Riven images in the tab — data already available (WFM serves an icon per
    weapon); `riven-data.js` carries `icon` through.
 3. Riven detail window: per-stat verdicts + live weapon-class order book

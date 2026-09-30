@@ -47,8 +47,8 @@
     { id: 'arcanes', label: 'Arcanes', icon: 'auto_awesome', el: '#arcanes-panel', nav: '#nav-arcanes', minW: 440, minH: 300 },
     { id: 'rivens', label: 'Rivens', icon: 'filter_alt', el: '#riven-panel', nav: null, minW: 460, minH: 340 },
     { id: 'cycles', label: 'Cycles', icon: 'calendar_month', el: '#cycles-panel', nav: '#nav-cycles', minW: 420, minH: 300 },
-    { id: 'starchart', label: 'Star Chart', icon: 'travel_explore', el: '#starchart-panel', nav: '#nav-starchart', minW: 480, minH: 320 },
     { id: 'compare', label: 'Compare', icon: 'compare_arrows', el: '#compare-panel', nav: '#nav-compare', minW: 480, minH: 320 },
+
     { id: 'recommendations', label: 'Recommendations', icon: 'tips_and_updates', el: '#recommendations-panel', nav: '#nav-mastery-recommendations', minW: 460, minH: 320 },
     { id: 'resources', label: 'Resources', icon: 'travel_explore', el: '#resource-search-panel', nav: '#nav-resource-search', minW: 420, minH: 300 },
     { id: 'settings', label: 'Settings', icon: 'settings', el: '#settings-page', nav: null, minW: 480, minH: 320 }
@@ -1367,6 +1367,33 @@
 
   window.OrdisDock = {
     focus: focus,
+    /* The panel registry, shared with splitview.js. The rail and the split panes are
+       built from the same list the strip uses, so a panel added here shows up in both
+       without a second edit. */
+    panels: PANELS,
+    /* Tear a panel off into a floating window at a point, without a drag in progress.
+       The rail's gesture ends outside the workspace and needs exactly the behaviour
+       tearOff() already implements, so this fakes the minimum drag state it reads
+       rather than duplicating the window-building code. */
+    tearOffPanel: function (id, x, y) {
+      var panel = byId[id];
+      if (!panel || panel.id === 'checklist' || !dom.ghost) return false;
+      drag = {
+        panel: panel,
+        id: panel.id,
+        floating: false,
+        floatEl: null,
+        floatBar: null,
+        offsetX: 40,
+        offsetY: 18,
+        startX: x,
+        startY: y
+      };
+      tearOff(x, y);
+      drag = null;
+      return true;
+    },
+
     /* Called by renderer.js whenever a panel is shown by any route.
        Without this the dock's highlight only tracked panels the dock itself
        switched to, so a relic link or a "Used By" jump would open a panel while

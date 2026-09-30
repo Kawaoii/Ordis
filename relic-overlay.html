@@ -24,10 +24,13 @@
       pointer-events: none;
     }
 
+    /* Anchored by its top edge, so the caller can place it just under a relic
+       card. It used to hang above that point and sat on top of the card it was
+       pricing, which is the one thing the player is looking at. */
     .price-pill {
       position: absolute;
       min-width: 54px;
-      transform: translate(-50%, -100%);
+      transform: translate(-50%, 0);
       padding: 6px 10px 7px;
       border: 1px solid rgba(130, 230, 255, 0.75);
       border-radius: 7px;
@@ -42,17 +45,18 @@
       text-shadow: 0 2px 8px rgba(0, 0, 0, 0.75);
     }
 
+    /* Tail points up at the card it belongs to. */
     .price-pill::after {
       content: "";
       position: absolute;
       left: 50%;
-      bottom: -7px;
+      top: -6px;
       width: 11px;
       height: 11px;
       transform: translateX(-50%) rotate(45deg);
-      border-right: 1px solid rgba(130, 230, 255, 0.62);
-      border-bottom: 1px solid rgba(130, 230, 255, 0.62);
-      background: rgba(3, 12, 21, 0.9);
+      border-left: 1px solid rgba(130, 230, 255, 0.62);
+      border-top: 1px solid rgba(130, 230, 255, 0.62);
+      background: rgba(8, 31, 47, 0.94);
     }
 
     .price-main {
