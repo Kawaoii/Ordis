@@ -71,7 +71,9 @@ public static class RivenScan {
   public class Found { public string Address; public string Text; }
   public class Reg { public long Start; public long Size; public uint Type; public uint Protect; }
 
-  public static int BytesRead = 0;
+  // long, not int. A full walk reads past 3.5 GB, which wraps a signed 32-bit counter
+  // into a negative number and made the app report "-327 MB read at -15.6 MB/s".
+  public static long BytesRead = 0;
   public static int RegionsRead = 0;
   public static long RegionsSkipped = 0;
   // How many remembered regions this scan started from. Zero means there was no cache
