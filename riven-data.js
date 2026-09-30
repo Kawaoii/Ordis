@@ -1110,6 +1110,43 @@ function rivenStatTiers(weapon, stats) {
   });
 }
 
+/**
+ * Where each stat sits, for a riven no single rule described.
+ *
+ * The community grader returns nothing here because the rule that matches the riven is
+ * supposed to explain it, and when none does the honest answer is that the sheet has no
+ * ranking. But the sheet does have rules for the weapon, and a stat appearing in one of
+ * them is not the same as a stat nobody has ever thought about. Every rule for the
+ * weapon is checked and the best placement any of them gives is used, which is a
+ * statement about the weapon rather than a verdict on the riven.
+ */
+function fallbackStatRanks(weapon, stats) {
+  const list = Array.isArray(stats) ? stats : [];
+  const entry = weapon && weapon.communityEntry;
+  if (!entry || !entry.rules || !entry.rules.length) return [];
+  const best = {};
+  for (const stat of list) {
+    if (!stat || !stat.key) continue;
+    let rank = -1;
+    for (const rule of entry.rules) {
+      if (rule.best === stat.key) { rank = 0; break; }
+      if (rule.second === stat.key) { rank = Math.min(rank === -1 ? 1 : rank, 1); continue; }
+      for (let i = 0; i < rule.positiveTiers.length; i++) {
+        if (rule.positiveTiers[i].indexOf(stat.key) !== -1) {
+          rank = rank === -1 ? 2 + i : Math.min(rank, 2 + i);
+        }
+      }
+      for (let i = 0; i < rule.negativeTiers.length; i++) {
+        if (rule.negativeTiers[i].indexOf(stat.key) !== -1) {
+          rank = rank === -1 ? i : Math.min(rank, i);
+        }
+      }
+    }
+    best[stat.key] = { key: stat.key, name: rivenStatName(stat.key) || stat.name, rank };
+  }
+  return Object.keys(best).map((k) => best[k]);
+}
+
 function gradeRiven(weapon, stats) {
   const list = Array.isArray(stats) ? stats : [];
   const positives = list.filter(s => s && s.isPositive);
@@ -1372,6 +1409,19 @@ function gradeRiven(weapon, stats) {
       score: score,
       // The community's own notation, the thing a player would write in chat.
       notation: communityGrade && communityGrade.graded ? communityGrade.notation : '',
+      /* Per-stat placement, so the detail view can say "ranked 1 for this weapon" on
+       * each stat. Without it the view had nothing to say and fell back to the old
+       * verdict list, which the community grader no longer produces.
+       *
+       * Also filled in on the fallback path, where no single rule described this riven.
+       * Those stats are genuinely unranked rather than unknown: the sheet does have a
+       * rule for this weapon and it mentions some of them, and saying which is more
+       * useful than the panel claiming to know nothing. rank -1 means not ranked. */
+      gradeStats: communityGrade && communityGrade.graded
+        ? (communityGrade.positiveRanks || []).concat(communityGrade.negativeRanks || []).map(function (r) {
+          return { key: r.key, name: r.name, rank: r.rank };
+        })
+        : fallbackStatRanks(weapon, list),
       communitySource: 'community-sheet',
       priceOriented: Boolean(communityGrade && communityGrade.priceOriented),
       reasons: reasons,

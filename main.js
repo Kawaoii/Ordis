@@ -440,6 +440,15 @@ function normalizeRivenInventoryEntry(raw) {
      * function kept was either in the grade object or a top-level field it happened to
      * remember. The rank is the answer; a letter on its own throws it away. */
     notation: String(raw.notation || '').trim(),
+    /* Where each stat sits in the community's ranking, so the detail view can say
+     * "ranked 1 for this weapon" per stat instead of the verdict list the old grader
+     * produced, which no longer exists and read as "no community verdict" against every
+     * stat of a correctly graded riven. */
+    gradeStats: Array.isArray(raw.gradeStats) ? raw.gradeStats.slice(0, 8).map((r) => ({
+      key: String(r.key || ''),
+      name: String(r.name || ''),
+      rank: Number.isFinite(Number(r.rank)) ? Number(r.rank) : -1
+    })).filter((r) => r.name) : [],
     /* The names the parser offered for this riven, best first: the bare weapon, then
      * the weapon with its riven name. "Hek" and "Hek Sati-fevadra" are the same weapon,
      * and which of them the market and the sheet are keyed on decides whether the riven
@@ -525,6 +534,7 @@ async function applyRivenGrade(entry) {
     entry.gradeLabel = grade.gradeLabel;
     entry.score = grade.score;
     entry.notation = grade.notation || '';
+    entry.gradeStats = Array.isArray(grade.gradeStats) ? grade.gradeStats : [];
     entry.priceOriented = !!grade.priceOriented;
     entry.perfectness = grade.perfectnessKnown ? grade.perfectness : null;
     entry.perfectnessKnown = !!grade.perfectnessKnown;
@@ -4426,6 +4436,7 @@ ipcMain.handle('riven-inventory-regrade', async () => {
       // Carried onto the row so it survives the save. The grade is the community's
       // ranking expressed as a letter, and the letter throws the ranking away.
       entry.notation = grade.notation || '';
+      entry.gradeStats = Array.isArray(grade.gradeStats) ? grade.gradeStats : [];
       entry.priceOriented = !!grade.priceOriented;
       updated += 1;
     } catch (err) {

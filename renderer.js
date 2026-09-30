@@ -17978,33 +17978,71 @@ card.addEventListener('auxclick', function(e) {
     }
 
     if (els.rivenDetailScore) {
-      var perfect = entry.perfectness != null
-        ? entry.perfectness + '% of a maximum roll'
-        : 'maximum roll unknown for this weapon';
-      var score = entry.score != null ? 'score ' + entry.score : 'no score';
-      els.rivenDetailScore.innerHTML =
-        '<div class="riven-detail-score__value">' + escapeRivenText(entry.perfectness != null ? entry.perfectness + '%' : '?') + '</div>' +
-        '<div class="riven-detail-score__meta">' + escapeRivenText(perfect) + '<br>' + escapeRivenText(score) + '</div>';
+      /* The community ranking, not the old perfectness figure.
+       *
+       * This panel used to show `perfectness` and the verdict of each stat, both of which
+       * came from the previous grading path. The community grader produces a ranking
+       * instead, so both read as missing and the panel contradicted the row next to it:
+       * the row said "S, 1cc 2cd elec" and the panel said "maximum roll unknown" and
+       * "no community verdict" against every single stat. The rank is the verdict now. */
+      var ranked = entry.grade && entry.grade !== 'unknown';
+      var head = ranked
+        ? '<div class="riven-detail-score__grade" data-grade="' + escapeRivenText(entry.grade) + '">' +
+            escapeRivenText(entry.grade) + '</div>'
+        : '<div class="riven-detail-score__grade is-ungraded" title="The community sheet has no ranking for this riven">–</div>';
+      var meta = [];
+      if (entry.notation) meta.push('ranked ' + entry.notation);
+      if (entry.gradeLabel) meta.push(entry.gradeLabel);
+      if (entry.score != null) meta.push('score ' + entry.score);
+      if (entry.perfectness != null) meta.push(entry.perfectness + '% of a maximum roll');
+      if (!meta.length) {
+        meta.push('The community sheet has no ranking for this riven, so there is nothing to show.');
+      }
+      els.rivenDetailScore.innerHTML = head +
+        '<div class="riven-detail-score__meta">' + escapeRivenText(meta.join(' · ')) + '</div>';
     }
 
     if (els.rivenDetailStats) {
+      /* Per-stat verdicts come from the ranking when there is one, and only fall back to
+       * the older statVerdicts list for a riven graded before the switch. Without this
+       * every stat of a correctly graded riven was labelled "no community verdict". */
+      var ranks = {};
+      (entry.gradeStats || []).forEach(function (r) { ranks[r.name] = r; });
       var verdicts = {};
       (entry.statVerdicts || []).forEach(function(v) { verdicts[v.name] = v.verdict; });
+
       els.rivenDetailStats.innerHTML = (entry.stats || []).map(function(s) {
-        var verdict = verdicts[s.name] || 'unknown';
-        var note = {
-          good: 'a good stat for this weapon',
-          poor: 'a stat this weapon does not want',
-          harmless: 'neither good nor bad here',
-          harmful: 'actively bad for this weapon',
-          combo: 'part of a combo that counts as good',
-          unknown: 'no community verdict for this stat'
-        }[verdict] || '';
+        var rank = ranks[s.name];
+        var verdict;
+        var note;
+
+        if (rank && rank.rank >= 0) {
+          verdict = rank.rank === 0 ? 'best' : rank.rank === 1 ? 'good' : 'ok';
+          note = s.isPositive
+            ? 'ranked ' + (rank.rank + 1) + ' for this weapon'
+            : 'the ' + (rank.rank + 1) + (rank.rank === 0 ? 'st' : rank.rank === 1 ? 'nd' : 'rd') + ' best penalty here';
+        } else if (rank && s.isPositive) {
+          verdict = 'unranked';
+          note = 'the sheet does not rank this stat for this weapon';
+        } else if (verdicts[s.name]) {
+          verdict = verdicts[s.name];
+          note = {
+            good: 'a good stat for this weapon',
+            poor: 'a stat this weapon does not want',
+            harmless: 'neither good nor bad here',
+            harmful: 'actively bad for this weapon',
+            combo: 'part of a combo that counts as good'
+          }[verdict] || '';
+        } else {
+          verdict = 'unranked';
+          note = 'the sheet has no opinion on this stat';
+        }
+
         return '<div class="riven-detail-stat" data-sign="' + (s.isPositive ? 'positive' : 'negative') +
           '" data-verdict="' + escapeRivenText(verdict) + '">' +
           '<span class="riven-detail-stat__name">' + escapeRivenText(s.name) + '</span>' +
           '<span class="riven-detail-stat__value">' + (s.isPositive ? '+' : '-') + escapeRivenText(s.value) + '%</span>' +
-          '<span class="riven-detail-stat__verdict">' + escapeRivenText(verdict) + '</span>' +
+          '<span class="riven-detail-stat__verdict">' + escapeRivenText(verdict === 'best' ? 'best' : verdict === 'unranked' ? 'unranked' : verdict) + '</span>' +
           '<span class="riven-detail-stat__note">' + escapeRivenText(note) + '</span>' +
           '</div>';
       }).join('');

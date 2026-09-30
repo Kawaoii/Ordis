@@ -3406,6 +3406,27 @@ input[type="password"].wfm-input {
   width: min(640px, 92vw);
 }
 
+/* The riven's name is a heading, not a caption.
+ *
+ * .modal-title shares a rule with placeholders, subtitles and help text that pins
+ * everything in it to 11px, so the name of the riven you had just clicked rendered at
+ * the size of a footnote and clipped inside a fixed 430px box. Long names like
+ * "Arca Plasmor-Feva-satipha" lost their tail. Sized as a heading, and allowed to
+ * wrap onto a second line rather than truncating, because a name you cannot read is
+ * worse than a taller header. */
+.riven-detail-modal .modal-title {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  hyphens: none;
+}
+
 .riven-detail-header-wrap {
   display: flex;
   align-items: center;
@@ -3432,6 +3453,27 @@ input[type="password"].wfm-input {
 }
 
 .riven-detail-img.is-hidden { display: none; }
+
+/* The "?" plate under the art.
+   A riven is a mod, and the mod art carries its own silhouette, so the picture is
+   shown on its own with the grade chip over it. The plate appeared because the same
+   element was used for both "no art yet" and "art present", and the fallback was never
+   hidden once the image loaded. */
+.riven-detail-media.is-empty::after {
+  content: '?';
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.riven-detail-media:not(.is-empty)::after { content: none; }
+
 
 .riven-detail-grade {
   position: absolute;
