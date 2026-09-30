@@ -4741,3 +4741,64 @@ body.has-split-rail .settings-content { padding-bottom: 0 !important; }
   color: #6ee7b7;
   filter: drop-shadow(0 0 6px rgba(110, 231, 183, 0.6));
 }
+
+/* ============================================================================
+   THE RAIL AS A SURFACE
+   ----------------------------------------------------------------------------
+   The rail was a strip of background-coloured elements sitting directly on the app
+   background, with its own border drawn down one side. It read as a divider - a line
+   down the window - rather than as a thing with a surface of its own, and the one
+   colour it had was hard-coded, so there was nowhere to tint it without editing the
+   rule.
+
+   It is a panel now: inset from the window edge, rounded on the corners that are its
+   own, filled from one token. The app background is what shows through those corners,
+   which is the point - a rounded corner is only visible as a rounded corner if
+   something is behind it, and behind the rail is the window, not more rail.
+
+   --rail-surface is the single place the rail's colour is decided. Tinting the rail is
+   now editing one value, and the border and the shadow are derived from the same one so
+   they cannot drift out of step with it.
+   ========================================================================== */
+
+:root {
+  /* The rail's fill. Deliberately its own token rather than --bg-primary, so the rail can
+     be tinted without dragging every other surface with it. */
+  --rail-surface: rgba(16, 27, 37, 0.92);
+  --rail-surface-hover: rgba(30, 45, 58, 0.92);
+  --rail-border: rgba(255, 255, 255, 0.10);
+}
+
+.dock-strip {
+  background: var(--rail-surface);
+  border: 1px solid var(--rail-border);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 18px 44px rgba(0, 0, 0, 0.42);
+}
+
+/* A vertical rail needs different corners from a horizontal one, because the two edges
+   that touch the window cannot be rounded without the rail either floating off them or
+   overflowing the window. The strip is centred on the bottom edge, so it already insets
+   itself; when it is a full-height rail on the left, the corners that are free are the
+   right-hand pair. */
+body.has-vertical-rail .dock-strip {
+  border-radius: 18px 0 0 18px;
+  border-right: 0;
+}
+
+/* The rail's own tab strip, when it wraps, must not repaint over the surface. */
+.dock-strip .dock-tab {
+  background: transparent;
+  box-shadow: none;
+}
+
+.dock-strip .dock-tab:hover {
+  background: var(--rail-surface-hover);
+}
+
+/* Lit state for an action tab, kept legible against the tinted surface. */
+.dock-strip .dock-tab.is-on {
+  background: rgba(110, 231, 183, 0.14);
+  border-color: rgba(110, 231, 183, 0.5);
+}

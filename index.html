@@ -1913,8 +1913,13 @@
   <script src="starchart.js"></script>
   <script src="wfm-contracts.js"></script>
   <script src="market.js"></script>
-  <script src="renderer.js"></script>
-  <script src="dock.js"></script>
+<script src="renderer.js"></script>
+<!-- The rail's drawn icons. Before dock.js, which reads them while building the tabs: a
+     tab built from an undefined icon is a tab with no icon, and it is built once and
+     never rebuilt, so the order here is not cosmetic. -->
+<script src="rail-icons.js"></script>
+<script src="dock.js"></script>
+
 <script src="splitview.js"></script>
 </body>
 

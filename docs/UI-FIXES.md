@@ -38,3 +38,31 @@ would have left an empty cell where the button is.
 
 Verified: 121 tiles, 20 rows of 6, no label outside its tile, no label overlapping
 another, and the grid scrolls to its full height.
+
+## Surfaces show edges where corners were asked for
+
+Reported from the running app: panels, the rail and the floating windows still read as
+rectangles with a border, where the intent everywhere else in this app is a rounded
+surface that sits inside the window rather than a box drawn on it. The panes were fixed
+(14px, all four corners, in 24e2e4c) and the riven detail card with them, but the change
+was made rule by rule rather than from a single definition, so anything that draws its
+own border still has square corners and anything that inherits a background from its
+parent inherits it square.
+
+What is actually wrong, in three parts:
+
+1. There is no shared surface definition. `border-radius` is written per component, so
+   a new surface defaults to 0 and nobody notices until it is on screen next to a rounded
+   one. A `.surface` class holding the radius, the border and the background token would
+   make the default correct and leave each component free to override it on purpose.
+2. Some surfaces clip their content with `overflow: hidden` and no radius, which squares
+   the corner of the first child even when the parent is rounded. The radius has to be on
+   the element that clips.
+3. Where a surface touches the window edge, the window's own corner is the only round one.
+   A rail flush to the left edge cannot be rounded on the left and stay flush, so the
+   choice is between an inset panel with all four corners and a full-bleed strip with two.
+   This is the same argument as the panes, and the panes went inset, so the rail should
+   too.
+
+Not yet done. The rail is the visible case and is being handled first; the floating
+windows and the modal surfaces are the remaining ones.

@@ -67,10 +67,10 @@
      * what the old row in the equipment rail did anyway - the same grid, one category
      * over. `view` is also why it is not torn off: there is only one grid, so there is
      * nothing separate to put in a window. */
-    { id: 'mods', label: 'Mods', icon: 'extension', el: '#content', nav: null, minW: 520, minH: 320, view: { category: 'Mods' } },
+    { id: 'mods', label: 'Mods', icon: OrdisRailIcons.modCard, el: '#content', nav: null, minW: 520, minH: 320, view: { category: 'Mods' } },
     // The riven rune itself. The "extension" mod glyph is what this used to be, which is
     // why Rivens and Mods looked like the same tab.
-    { id: 'rivens', label: 'Rivens', icon: 'assets/riven-rune.png', fallbackIcon: 'extension', el: '#riven-panel', nav: null, minW: 460, minH: 340 },
+    { id: 'rivens', label: 'Rivens', icon: OrdisRailIcons.rivenRune, el: '#riven-panel', nav: null, minW: 460, minH: 340 },
     { id: 'arcanes', label: 'Arcanes', icon: 'auto_awesome', el: '#arcanes-panel', nav: '#nav-arcanes', minW: 440, minH: 300 },
     // The relic the player is actually holding, not a decorative box.
     { id: 'relics', label: 'Relics', icon: 'assets/void-trace.png', fallbackIcon: 'filter_vintage', el: '#relics-panel', nav: '#nav-relics', minW: 440, minH: 300 },
@@ -489,14 +489,23 @@
 
 
     var icon;
-    /* An icon is either a font ligature or a picture of the thing.
+    /* An icon is a font ligature, a picture, or drawn markup.
      *
      * The rail used to assume a ligature and put the panel name straight into the text
      * node, which fails quietly: a missing ligature renders as its own name as text, so
-     * the tab ends up captioned "assets/argon-crystal.png" instead of drawing a crystal.
-     * A path is checked for a file extension instead, which is the only way to tell the
-     * two apart from the single string the panel list carries. */
-    if (/\.(png|webp|svg|jpe?g)$/i.test(panel.icon)) {
+     * the tab ends up captioned "extension" rather than drawing anything. A file path is
+     * told apart by its extension, and markup by its first character, which is the only
+     * way to carry three kinds in one field.
+     *
+     * The drawn icons are inline rather than files on purpose. currentColor does not cross
+     * into an SVG loaded through <img>, so as files they came out one fixed colour and
+     * ignored the lit state - an action tab with no way to show it was on. Inlined, they
+     * take the tab's colour like a glyph does. */
+    if (panel.icon && panel.icon.charAt(0) === '<') {
+      icon = document.createElement('span');
+      icon.className = 'dock-tab-icon dock-tab-art';
+      icon.innerHTML = panel.icon;
+    } else if (/\.(png|webp|svg|jpe?g)$/i.test(panel.icon)) {
       icon = document.createElement('img');
       icon.className = 'dock-tab-icon dock-tab-art';
       icon.src = panel.icon;
